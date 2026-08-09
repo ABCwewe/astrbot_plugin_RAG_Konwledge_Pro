@@ -150,7 +150,14 @@ class AstrBotRAGAdapter:
 
     @property
     def tmp_dir(self) -> Path:
-        """插件专属临时目录（data/plugin_data/<plugin>/tmp/）。"""
+        """插件专属临时目录（data/plugin_data/<plugin>/tmp/）。
+
+        访问时确保目录存在——目录可能被外部清理，缺失时重建，避免
+        mkdtemp 抛 FileNotFoundError。
+        """
+        if self._tmp_dir is None:
+            raise RuntimeError("RAG 引擎未初始化：请在插件设置或 WebUI 配置页完成配置")
+        self._tmp_dir.mkdir(parents=True, exist_ok=True)
         return self._tmp_dir
 
     # -- config -----------------------------------------------------------
