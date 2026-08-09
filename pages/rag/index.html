@@ -183,6 +183,15 @@
       <div id="search-status" class="status"></div>
       <div id="results"></div>
     </div>
+    <div class="card">
+      <h2>图片检索测试（以图搜库）</h2>
+      <div class="row">
+        <input type="file" id="img-query" accept="image/*" style="flex:1">
+        <button class="primary" id="btn-search-image">图片检索</button>
+      </div>
+      <div class="meta" style="margin-top:6px">对选中的知识库做图片向量检索，返回最相似的图片/图文块；无图片向量的库自动跳过。</div>
+      <div id="img-query-status" class="status"></div>
+    </div>
   </div>
 
   <!-- ============ 配置 ============ -->
@@ -726,6 +735,55 @@
         });
       }
 
+      function renderResults(results) {
+        $("results").innerHTML = results.map((r) => {
+          const source = (r.metadata && r.metadata.source) || r.document_id;
+          const page = r.metadata && r.metadata.page;
+          const kbId = (r.metadata && r.metadata.kb_id) || "";
+          const score = r.rerank_score != null
+            ? `向量 ${r.vector_score.toFixed(4)} / 重排 ${r.rerank_score.toFixed(4)}`
+            : `向量 ${r.vector_score.toFixed(4)}`;
+          const body = r.content || (r.image_path ? `[图片: ${r.image_path}]` : "（无内容）");
+          return `<div class="result-item"><div class="meta">[${esc(kbId)}] [${esc(source)}${page ? ", Page " + page : ""}] · ${esc(score)}</div><div>${esc(body)}</div></div>`;
+        }).join("");
+      }
+
+      function readFileAsBase64(file) {
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => {
+            const raw = String(reader.result || "");
+            resolve(raw.slice(raw.indexOf(",") + 1));  // 去掉 data:image/...;base64, 前缀
+          };
+          reader.onerror = () => reject(new Error("读取图片失败"));
+          reader.readAsDataURL(file);
+        });
+      }
+
+      async function searchImage() {
+        const file = $("img-query").files[0];
+        if (!file) { setStatus("img-query-status", "请先选择一张图片", false); return; }
+        const kbIds = Array.from(searchKbs);
+        if (!kbIds.length) { setStatus("img-query-status", "请先选择至少一个知识库", false); return; }
+        const topN = Math.max(1, Math.min(30, Number($("top-n").value) || 6));
+        setStatus("img-query-status", `图片检索中（${file.name}）…`);
+        $("results").innerHTML = "";
+        try {
+          const imageBase64 = await readFileAsBase64(file);
+          const data = await bridge.apiPost("search/image", {
+            image_base64: imageBase64,
+            kb_ids: kbIds.join(","),
+            top_n: topN,
+          });
+          const results = data.results || [];
+          if (!results.length) { setStatus("img-query-status", "未检索到相似图片。", false); return; }
+          setStatus("img-query-status", `图片检索到 ${results.length} 条：`, true);
+          renderResults(results);
+        } catch (e) {
+          setStatus("img-query-status", "图片检索失败: " + e, false);
+        }
+      }
+
       async function search() {
         const q = $("query").value.trim();
         if (!q) return;
@@ -739,16 +797,7 @@
           const results = data.results || [];
           if (!results.length) { setStatus("search-status", "未检索到相关内容。", false); return; }
           setStatus("search-status", `跨 ${kbIds.length} 个知识库检索到 ${results.length} 条：`, true);
-          $("results").innerHTML = results.map((r) => {
-            const source = (r.metadata && r.metadata.source) || r.document_id;
-            const page = r.metadata && r.metadata.page;
-            const kbId = (r.metadata && r.metadata.kb_id) || "";
-            const score = r.rerank_score != null
-              ? `向量 ${r.vector_score.toFixed(4)} / 重排 ${r.rerank_score.toFixed(4)}`
-              : `向量 ${r.vector_score.toFixed(4)}`;
-            const body = r.content || (r.image_path ? `[图片: ${r.image_path}]` : "（无内容）");
-            return `<div class="result-item"><div class="meta">[${esc(kbId)}] [${esc(source)}${page ? ", Page " + page : ""}] · ${esc(score)}</div><div>${esc(body)}</div></div>`;
-          }).join("");
+          renderResults(results);
         } catch (e) {
           setStatus("search-status", "检索失败: " + e, false);
         }
@@ -837,6 +886,7 @@
         $("btn-kb-create").onclick = createKb;
         $("btn-kb-refresh").onclick = refreshKbs;
         $("btn-search").onclick = search;
+        $("btn-search-image").onclick = searchImage;
         $("btn-config-save").onclick = saveConfig;
         $("query").addEventListener("keydown", (e) => { if (e.key === "Enter") search(); });
         setupDropzone();

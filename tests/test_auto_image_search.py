@@ -199,6 +199,42 @@ async def test_engine_search_image_by_path(tmp_path):
     await engine.close()
 
 
+async def test_adapter_search_image_multi_and_single_fallback(tmp_path, monkeypatch):
+    import os
+
+    monkeypatch.setattr(os, "getcwd", lambda: str(tmp_path))
+    from adapter.astrbot import AstrBotRAGAdapter
+
+    engine = RAGEngine(
+        _image_config(),
+        tmp_path / "rag",
+        store=FakeVectorStore(),
+        embedding=HashEmbedding(dim=32),
+        image_embedding=HashEmbedding(dim=32, supports_image=True),
+        reranker=None,
+    )
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "角色A.png").write_bytes(_png_bytes("角色A"))
+    (docs / "kb2.txt").write_text("纯文本", encoding="utf-8")
+    await engine.ingest("kb1", [docs / "角色A.png"])
+    await engine.ingest("kb2", [docs / "kb2.txt"])
+
+    adapter = AstrBotRAGAdapter(None, {"default_kb_id": "kb1"})
+    adapter._engine = engine
+
+    probe = tmp_path / "probe.png"
+    probe.write_bytes(_png_bytes("角色A"))
+
+    # 多库：跳过无图库 kb2
+    results = await adapter.search_image(["kb1", "kb2"], str(probe))
+    assert results and all(r.metadata.get("kb_id") == "kb1" for r in results)
+    # 单库兜底：current_kb = 默认 kb1
+    results2 = await adapter.search_image(None, str(probe))
+    assert results2 and results2[0].metadata["source"] == "角色A.png"
+    await engine.close()
+
+
 async def test_engine_search_image_by_path_disabled_raises(tmp_path):
     cfg = RAGConfig.from_dict(
         {

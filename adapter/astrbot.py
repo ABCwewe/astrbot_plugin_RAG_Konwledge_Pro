@@ -400,6 +400,25 @@ class AstrBotRAGAdapter:
             return None
         return RAGEngine.format_context(results)
 
+    async def search_image(
+        self,
+        kb_ids: list[str] | None,
+        image_path: str,
+        *,
+        top_n: int | None = None,
+    ):
+        """Image-as-query retrieval (WebUI test). Multi-KB when ``kb_ids``
+        given (skips image-less KBs), otherwise the current KB."""
+        engine = self._require_engine()
+        if kb_ids:
+            return await engine.search_image_multi(kb_ids, image_path, top_n=top_n)
+        kb = self.current_kb
+        if not kb:
+            from ..core.exceptions import ConfigurationError
+
+            raise ConfigurationError("未指定知识库")
+        return await engine.search_image_by_path(kb, image_path, top_n=top_n)
+
     async def get_build_progress_dict(self, kb_id: str) -> dict | None:
         progress = self._require_engine().get_build_progress(kb_id)
         return progress.to_dict() if progress else None

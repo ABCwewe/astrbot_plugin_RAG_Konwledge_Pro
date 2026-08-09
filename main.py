@@ -6,6 +6,10 @@ stay in ``core/`` and are reached through the adapter.
 
 from __future__ import annotations
 
+import asyncio
+import base64
+import shutil
+import tempfile
 from pathlib import Path
 
 from astrbot.api import logger
@@ -26,6 +30,21 @@ _SUPPORTED_EXTS = {
 }
 
 
+def _serialize_results(results) -> list[dict]:
+    return [
+        {
+            "chunk_id": r.chunk_id,
+            "document_id": r.document_id,
+            "content": r.content,
+            "image_path": r.image_path,
+            "vector_score": r.vector_score,
+            "rerank_score": r.rerank_score,
+            "metadata": r.metadata,
+        }
+        for r in results
+    ]
+
+
 class RAGPlugin(Star):
     def __init__(self, context: Context, config: dict | None = None) -> None:
         super().__init__(context)
@@ -38,6 +57,7 @@ class RAGPlugin(Star):
         ctx.register_web_api(f"/{ROUTE_PREFIX}/status", self.web_status, ["GET"], "RAG 索引状态")
         ctx.register_web_api(f"/{ROUTE_PREFIX}/list", self.web_list, ["GET"], "RAG 知识库列表")
         ctx.register_web_api(f"/{ROUTE_PREFIX}/search", self.web_search, ["GET"], "RAG 检索")
+        ctx.register_web_api(f"/{ROUTE_PREFIX}/search/image", self.web_search_image, ["POST"], "RAG 图片检索测试")
         ctx.register_web_api(f"/{ROUTE_PREFIX}/ingest", self.web_ingest, ["POST"], "RAG 导入文档")
         ctx.register_web_api(f"/{ROUTE_PREFIX}/rebuild", self.web_rebuild, ["POST"], "RAG 重建索引")
         ctx.register_web_api(f"/{ROUTE_PREFIX}/progress", self.web_progress, ["GET"], "RAG 构建进度")
@@ -169,24 +189,42 @@ class RAGPlugin(Star):
                     if not kb:
                         return error_response("未指定知识库 ID", status_code=400)
                     results = await self.adapter.search(kb, query, top_n=top_n)
-            return json_response(
-                {
-                    "results": [
-                        {
-                            "chunk_id": r.chunk_id,
-                            "document_id": r.document_id,
-                            "content": r.content,
-                            "image_path": r.image_path,
-                            "vector_score": r.vector_score,
-                            "rerank_score": r.rerank_score,
-                            "metadata": r.metadata,
-                        }
-                        for r in results
-                    ]
-                }
-            )
+            return json_response({"results": _serialize_results(results)})
         except Exception as exc:
             logger.exception("[RAG] web/search 失败")
+            return error_response(str(exc))
+
+    async def web_search_image(self):
+        """图片检索测试：JSON body 携带 base64 图片 + 选中知识库列表。
+
+        不用 bridge.upload（其 endpoint 不能带查询参数，且单文件表单无法
+        传 kb_ids），图片经 base64 走普通 apiPost。
+        """
+        try:
+            body = await request.json(default={}) or {}
+            image_b64 = str(body.get("image_base64", "") or "")
+            if not image_b64:
+                return error_response("缺少图片数据", status_code=400)
+            kb_ids = [k.strip() for k in str(body.get("kb_ids", "") or "").split(",") if k.strip()]
+            top_n = body.get("top_n")
+            try:
+                data = base64.b64decode(image_b64, validate=False)
+            except (ValueError, TypeError) as exc:
+                return error_response(f"图片数据无效: {exc}", status_code=400)
+            if not data:
+                return error_response("图片数据为空", status_code=400)
+            stage = Path(tempfile.mkdtemp(prefix="rag_imgquery_", dir=str(self.adapter.tmp_dir)))
+            try:
+                img_path = stage / "query_image.bin"
+                await asyncio.to_thread(img_path.write_bytes, data)
+                results = await self.adapter.search_image(
+                    kb_ids or None, str(img_path), top_n=top_n
+                )
+            finally:
+                shutil.rmtree(stage, ignore_errors=True)
+            return json_response({"results": _serialize_results(results)})
+        except Exception as exc:
+            logger.exception("[RAG] web/search/image 失败")
             return error_response(str(exc))
 
     async def web_ingest(self):
