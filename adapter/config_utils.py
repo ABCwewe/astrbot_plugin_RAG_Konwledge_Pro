@@ -11,6 +11,9 @@ Pure logic, no AstrBot imports, so it is unit-testable standalone:
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 MASKED_SENTINEL = "********"
 """Value sent to the frontend for secret fields; submitting it back means
 'keep the current value'."""
@@ -96,3 +99,29 @@ def group_members(schema: dict) -> dict[str, list[str]]:
         group = meta.get("group", "general") if isinstance(meta, dict) else "general"
         members.setdefault(group, []).append(key)
     return members
+
+
+def load_search_defaults(path: str | Path) -> list[str]:
+    """Load persisted default multi-KB search ids (empty on missing/corrupt)."""
+    try:
+        raw = json.loads(Path(path).read_text(encoding="utf-8"))
+        ids = raw.get("kb_ids", []) if isinstance(raw, dict) else []
+        return [kb for kb in ids if isinstance(kb, str) and kb.strip()]
+    except (OSError, json.JSONDecodeError):
+        return []
+
+
+def save_search_defaults(path: str | Path, kb_ids: list[str]) -> list[str]:
+    """Persist default multi-KB search ids; returns the deduped/trimmed list."""
+    ids: list[str] = []
+    for kb in kb_ids:
+        kb = str(kb).strip()
+        if kb and kb not in ids:
+            ids.append(kb)
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"kb_ids": ids}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return ids

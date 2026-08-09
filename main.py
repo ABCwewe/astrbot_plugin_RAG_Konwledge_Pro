@@ -48,6 +48,9 @@ class RAGPlugin(Star):
         ctx.register_web_api(f"/{ROUTE_PREFIX}/kb/delete", self.web_kb_delete, ["POST"], "RAG 删除知识库")
         ctx.register_web_api(f"/{ROUTE_PREFIX}/kb/create", self.web_kb_create, ["POST"], "RAG 新建知识库")
         ctx.register_web_api(f"/{ROUTE_PREFIX}/kb/select", self.web_kb_select, ["POST"], "RAG 选择当前知识库")
+        ctx.register_web_api(f"/{ROUTE_PREFIX}/kb/index/delete", self.web_kb_index_delete, ["POST"], "RAG 删除知识库索引")
+        ctx.register_web_api(f"/{ROUTE_PREFIX}/kb/defaults", self.web_kb_defaults_get, ["GET"], "RAG 默认聚合检索知识库")
+        ctx.register_web_api(f"/{ROUTE_PREFIX}/kb/defaults", self.web_kb_defaults_set, ["POST"], "RAG 设置默认聚合检索知识库")
         ctx.register_web_api(f"/{ROUTE_PREFIX}/kb/documents", self.web_kb_documents, ["GET"], "RAG 知识库文档列表")
         ctx.register_web_api(f"/{ROUTE_PREFIX}/kb/document/delete", self.web_kb_document_delete, ["POST"], "RAG 删除知识库文档")
         logger.info("[RAG] 插件已加载，路由前缀 /%s", ROUTE_PREFIX)
@@ -137,8 +140,12 @@ class RAGPlugin(Star):
             if kb_ids:
                 results = await self.adapter.search_multi(kb_ids, query, top_n=top_n)
             else:
-                kb = request.query.get("kb_id", self.adapter.default_kb)
-                results = await self.adapter.search(kb, query, top_n=top_n)
+                defaults = self.adapter.get_default_search_kbs()
+                if defaults:
+                    results = await self.adapter.search_multi(defaults, query, top_n=top_n)
+                else:
+                    kb = request.query.get("kb_id", self.adapter.default_kb)
+                    results = await self.adapter.search(kb, query, top_n=top_n)
             return json_response(
                 {
                     "results": [
@@ -261,6 +268,32 @@ class RAGPlugin(Star):
             return json_response({"selected": kb})
         except Exception as exc:
             logger.exception("[RAG] web/kb/select 失败")
+            return error_response(str(exc))
+
+    async def web_kb_index_delete(self):
+        try:
+            body = await request.json(default={})
+            kb = (body or {}).get("kb_id") or self.adapter.default_kb
+            await self.adapter.drop_index(kb)
+            return json_response({"index_deleted": kb})
+        except Exception as exc:
+            logger.exception("[RAG] web/kb/index/delete 失败")
+            return error_response(str(exc))
+
+    async def web_kb_defaults_get(self):
+        try:
+            return json_response({"kb_ids": self.adapter.get_default_search_kbs()})
+        except Exception as exc:
+            logger.exception("[RAG] web/kb/defaults 读取失败")
+            return error_response(str(exc))
+
+    async def web_kb_defaults_set(self):
+        try:
+            body = await request.json(default={})
+            ids = self.adapter.set_default_search_kbs((body or {}).get("kb_ids", []))
+            return json_response({"kb_ids": ids})
+        except Exception as exc:
+            logger.exception("[RAG] web/kb/defaults 保存失败")
             return error_response(str(exc))
 
     async def web_kb_documents(self):

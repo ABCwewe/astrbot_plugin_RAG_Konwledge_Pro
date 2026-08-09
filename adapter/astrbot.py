@@ -26,7 +26,14 @@ except ImportError:  # standalone (tests / scripts)
     from core import RAGConfig, RAGEngine
     from core.exceptions import ConfigurationError, RAGError
 
-from .config_utils import apply_patch, group_members, group_order, mask_config
+from .config_utils import (
+    apply_patch,
+    group_members,
+    group_order,
+    load_search_defaults,
+    mask_config,
+    save_search_defaults,
+)
 
 logger = logging.getLogger("rag.adapter")
 
@@ -385,12 +392,33 @@ class AstrBotRAGAdapter:
     async def delete_kb(self, kb_id: str) -> None:
         await self._require_engine().delete_kb(kb_id)
 
+    async def drop_index(self, kb_id: str) -> None:
+        """Delete only the KB index; documents and the KB itself are kept."""
+        await self._require_engine().drop_index(kb_id)
+
     async def create_kb(self, kb_id: str) -> dict:
         if not kb_id or not kb_id.strip():
             from ..core.exceptions import ConfigurationError
 
             raise ConfigurationError("知识库 ID 不能为空")
         return await self._require_engine().create_kb(kb_id.strip())
+
+    # -- 默认聚合检索知识库 ------------------------------------------------
+
+    def _require_data_dir(self) -> Path:
+        if self._data_dir is None:
+            raise RuntimeError("RAG 引擎未初始化：请先在配置页完成 Embedding/Rerank 配置")
+        return self._data_dir
+
+    def _defaults_path(self) -> Path:
+        return self._require_data_dir() / "search_defaults.json"
+
+    def get_default_search_kbs(self) -> list[str]:
+        """Persisted KB ids enabled by default for aggregated search."""
+        return load_search_defaults(self._defaults_path())
+
+    def set_default_search_kbs(self, kb_ids: list[str]) -> list[str]:
+        return save_search_defaults(self._defaults_path(), kb_ids)
 
     async def list_documents(self, kb_id: str) -> list[dict]:
         return await self._require_engine().list_documents(kb_id)

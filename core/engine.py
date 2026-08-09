@@ -271,6 +271,12 @@ class RAGEngine:
         """Create an empty knowledge base (empty READY index)."""
         return await self._manager.ensure_index(kb_id, self.config)
 
+    async def drop_index(self, kb_id: str) -> None:
+        """Delete the KB's index (all versions/collections + manifests) but
+        keep the knowledge base itself and its document files. The index is
+        rebuilt on the next ingest/rebuild."""
+        await self._manager.delete_index(kb_id)
+
     # -- context formatting -----------------------------------------------
 
     @staticmethod

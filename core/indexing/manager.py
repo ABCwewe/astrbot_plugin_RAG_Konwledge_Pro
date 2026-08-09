@@ -230,6 +230,23 @@ class IndexManager:
             await asyncio.to_thread(shutil.rmtree, root, ignore_errors=True)
         self._progress.pop(kb_id, None)
 
+    async def delete_index(self, kb_id: str) -> None:
+        """Delete only the KB's index (collections + manifests + registry),
+        keeping the KB root and its document files."""
+        store = self._manifest_store(kb_id)
+        manifests = await store.list_manifests()
+        for manifest in manifests.values():
+            try:
+                await self._store.delete_collection(manifest.collection_name)
+            except QdrantError as exc:
+                logger.warning("[QDRANT] 删除 collection 失败: %s", exc)
+            await store.delete_manifest(manifest.version)
+        for path in (store.active_path, store.documents_path):
+            if path.exists():
+                await asyncio.to_thread(path.unlink)
+        self._progress.pop(kb_id, None)
+        logger.info("[INDEX] 已删除知识库 %s 的索引（文档保留）", kb_id)
+
     async def status(self, kb_id: str, config: RAGConfig | None = None) -> dict:
         """Human/UI-readable snapshot of a knowledge base."""
         store = self._manifest_store(kb_id)

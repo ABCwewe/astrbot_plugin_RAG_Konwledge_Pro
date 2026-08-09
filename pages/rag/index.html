@@ -54,7 +54,6 @@
     .badge.warn { background: rgba(245,166,35,.15); color: var(--warn); }
     .badge.err { background: rgba(229,72,77,.15); color: var(--danger); }
     .status { margin-top: 8px; min-height: 20px; color: var(--muted); }
-    #progress { display: none; }
 
     /* 顶部子页 Tab */
     .tabs { display: flex; gap: 6px; margin-bottom: 16px; flex-wrap: wrap; }
@@ -72,9 +71,18 @@
       display: flex; align-items: center; gap: 10px;
       border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
     }
-    .kb-item.selected { border-color: var(--accent); background: var(--drop); }
     .kb-name { font-weight: 600; min-width: 120px; }
     .kb-stats { color: var(--muted); font-size: 12px; flex: 1; }
+
+    /* 默认聚合库勾选 */
+    .kb-check { display: flex; gap: 10px; flex-wrap: wrap; }
+    .kb-check label {
+      display: flex; align-items: center; gap: 6px; padding: 6px 12px;
+      border: 1px solid var(--border); border-radius: 8px; cursor: pointer;
+      color: var(--text); font-size: 13px;
+    }
+    .kb-check label.checked { border-color: var(--accent); background: var(--drop); }
+    .kb-check input { width: 15px; height: 15px; }
 
     /* 拖拽上传区 */
     .dropzone {
@@ -93,15 +101,24 @@
     .doc-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .doc-size { color: var(--muted); font-size: 12px; white-space: nowrap; }
 
-    /* 多知识库选择 */
-    .kb-check { display: flex; gap: 10px; flex-wrap: wrap; }
-    .kb-check label {
-      display: flex; align-items: center; gap: 6px; padding: 6px 12px;
-      border: 1px solid var(--border); border-radius: 8px; cursor: pointer;
-      color: var(--text); font-size: 13px;
+    /* 悬浮窗 */
+    .modal-overlay {
+      position: fixed; inset: 0; background: rgba(0,0,0,.45);
+      display: none; align-items: center; justify-content: center; z-index: 100;
     }
-    .kb-check label.checked { border-color: var(--accent); background: var(--drop); }
-    .kb-check input { width: 15px; height: 15px; }
+    .modal-overlay.open { display: flex; }
+    .modal {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 12px; max-width: 640px; width: calc(100% - 40px);
+      max-height: 86vh; overflow-y: auto; padding: 18px 20px;
+    }
+    .modal h3 { margin: 0 0 12px; font-size: 16px; }
+    .modal .close-x {
+      float: right; border: none; background: none; color: var(--muted);
+      font-size: 20px; cursor: pointer; padding: 0 4px;
+    }
+    .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }
+    .modal-msg { white-space: pre-wrap; word-break: break-word; margin: 4px 0 16px; }
 
     /* 配置表单 */
     fieldset {
@@ -139,32 +156,12 @@
 
     <div class="card">
       <div class="row" style="margin-bottom:12px">
-        <h2 style="flex:1">当前知识库: <span id="cur-kb-name">-</span></h2>
-        <button id="btn-rebuild">重建索引</button>
-        <button class="danger" id="btn-kb-delete">删除该知识库</button>
+        <h2 style="flex:1">默认聚合检索知识库</h2>
+        <button class="primary" id="btn-defaults-save">保存默认</button>
       </div>
-      <div id="status" class="status"></div>
-    </div>
-
-    <div class="card">
-      <h2>上传文档（拖拽到此处，或点击选择）</h2>
-      <div class="dropzone" id="dropzone">
-        支持 txt / md / pdf / 图片，可多选；文件只进入当前知识库
-      </div>
-      <input type="file" id="files" multiple accept=".txt,.md,.markdown,.pdf,.png,.jpg,.jpeg,.webp,.bmp,.gif" style="display:none">
-      <div id="upload-status" class="status"></div>
-    </div>
-
-    <div class="card">
-      <div class="row" style="margin-bottom:12px">
-        <h2 style="flex:1">文档列表（当前知识库）</h2>
-        <button id="btn-doc-refresh">刷新</button>
-      </div>
-      <div id="documents" class="status">未加载</div>
-    </div>
-
-    <div class="card" id="progress" style="display:none">
-      <div class="row"><label>重建进度</label><div id="progress-text" class="status"></div></div>
+      <div class="meta" style="margin-bottom:8px">检索页将默认勾选这些知识库；检索时可临时调整。</div>
+      <div id="defaults-kbs" class="kb-check status">加载中…</div>
+      <div id="defaults-status" class="status"></div>
     </div>
   </div>
 
@@ -198,6 +195,40 @@
     </div>
   </div>
 
+  <!-- ============ 知识库配置悬浮窗 ============ -->
+  <div class="modal-overlay" id="modal-kb">
+    <div class="modal">
+      <button class="close-x" id="kb-modal-close">×</button>
+      <h3 id="kb-modal-title">知识库</h3>
+      <div id="kb-modal-status" class="status"></div>
+      <div class="row" style="margin:10px 0">
+        <button class="primary" id="kb-modal-rebuild">重建索引</button>
+        <button class="danger" id="kb-modal-drop-index">删除索引</button>
+      </div>
+      <h2>上传文档</h2>
+      <div class="dropzone" id="dropzone">
+        拖拽文件到此处，或点击选择（txt / md / pdf / 图片，可多选）
+      </div>
+      <input type="file" id="files" multiple accept=".txt,.md,.markdown,.pdf,.png,.jpg,.jpeg,.webp,.bmp,.gif" style="display:none">
+      <div id="upload-status" class="status"></div>
+      <h2 style="margin-top:14px">文档列表</h2>
+      <div id="documents" class="status">未加载</div>
+      <div id="modal-progress" class="status" style="display:none"></div>
+    </div>
+  </div>
+
+  <!-- ============ 确认弹窗 ============ -->
+  <div class="modal-overlay" id="modal-confirm">
+    <div class="modal" style="max-width:420px">
+      <h3 id="confirm-title">确认</h3>
+      <div class="modal-msg" id="confirm-msg"></div>
+      <div class="modal-actions">
+        <button id="confirm-cancel">取消</button>
+        <button class="danger" id="confirm-ok">确定</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     (function () {
       // Bridge SDK 由 dashboard 在文档末尾注入，晚于本页内联脚本执行，
@@ -222,8 +253,9 @@
       };
       let bridge = null;
       let kbs = [];
-      let selectedKb = "default";
+      let modalKb = null;
       let searchKbs = new Set();
+      let defaultsKbs = new Set();
       let schema = {};
       let groups = [];
       let groupMembers = {};
@@ -248,12 +280,34 @@
         return (bytes / 1048576).toFixed(1) + " MB";
       }
 
+      // ---------- 确认弹窗（沙箱无 allow-modals，原生 confirm 静默失败） ----------
+      let confirmCallback = null;
+      function confirmDialog(title, message, onOk) {
+        $("confirm-title").textContent = title || "确认";
+        $("confirm-msg").textContent = message || "";
+        confirmCallback = onOk;
+        $("modal-confirm").classList.add("open");
+      }
+      $("confirm-ok").addEventListener("click", () => {
+        $("modal-confirm").classList.remove("open");
+        const cb = confirmCallback;
+        confirmCallback = null;
+        if (cb) cb();
+      });
+      $("confirm-cancel").addEventListener("click", () => {
+        $("modal-confirm").classList.remove("open");
+        confirmCallback = null;
+      });
+      $("modal-confirm").addEventListener("click", (e) => {
+        if (e.target === $("modal-confirm")) { $("modal-confirm").classList.remove("open"); confirmCallback = null; }
+      });
+
       // ---------- 子页切换 ----------
       document.querySelectorAll(".tab-btn").forEach((btn) => {
         btn.addEventListener("click", () => {
           document.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("active", b === btn));
           document.querySelectorAll(".panel").forEach((p) => p.classList.toggle("active", p.id === "panel-" + btn.dataset.tab));
-          if (btn.dataset.tab === "search") refreshSearchKbs();
+          if (btn.dataset.tab === "search") applyDefaultsToSearch();
         });
       });
 
@@ -266,108 +320,134 @@
           else {
             $("kb-list").innerHTML = kbs.map((kb) => {
               const cls = kb.status === "READY" ? "ok" : kb.status === "FAILED" ? "err" : "warn";
-              const sel = kb.kb_id === selectedKb ? "selected" : "";
-              return `<div class="kb-item ${sel}" data-kb="${esc(kb.kb_id)}">
+              return `<div class="kb-item" data-kb="${esc(kb.kb_id)}">
                 <span class="kb-name">${esc(kb.kb_id)}</span>
                 <span class="badge ${cls}">${esc(kb.status)}</span>
                 <span class="kb-stats">v${kb.active_version ?? "-"} · 文档 ${kb.document_count} · 块 ${kb.chunk_count}</span>
-                <button class="primary" data-act="select">选择</button>
+                <button class="primary" data-act="config">配置</button>
+                <button data-act="drop-index">删除索引</button>
                 <button class="danger" data-act="delete">删除</button>
               </div>`;
             }).join("");
             $("kb-list").querySelectorAll(".kb-item").forEach((item) => {
               const kbId = item.dataset.kb;
-              item.querySelector('[data-act="select"]').addEventListener("click", () => selectKb(kbId));
+              item.querySelector('[data-act="config"]').addEventListener("click", () => openKbModal(kbId));
+              item.querySelector('[data-act="drop-index"]').addEventListener("click", () => dropIndex(kbId));
               item.querySelector('[data-act="delete"]').addEventListener("click", () => deleteKb(kbId));
             });
           }
-          refreshSearchKbs();
+          renderDefaultChecks();
         } catch (e) {
           $("kb-list").textContent = "列表加载失败: " + e;
         }
       }
 
-      function selectKb(kbId) {
-        selectedKb = kbId;
-        $("cur-kb-name").textContent = kbId;
-        // 上传接口无法携带参数，先把当前知识库告知后端（bridge 限制）
-        bridge.apiPost("kb/select", { kb_id: kbId }).catch(() => {});
-        refreshKbs();
-        refreshStatus();
-        loadDocuments();
-      }
-
       async function createKb() {
         const kbId = $("new-kb").value.trim();
-        if (!kbId) { setStatus("status", "请输入知识库 ID", false); return; }
+        if (!kbId) { setStatus("kb-list", "请输入知识库 ID", false); return; }
         try {
-          const data = await bridge.apiPost("kb/create", { kb_id: kbId });
-          setStatus("status", "已创建: " + JSON.stringify(data), true);
+          await bridge.apiPost("kb/create", { kb_id: kbId });
+          setStatus("kb-list", `已创建知识库「${kbId}」`, true);
           $("new-kb").value = "";
-          selectKb(kbId);
+          refreshKbs();
+          loadDefaults();
         } catch (e) {
-          setStatus("status", "创建失败: " + e, false);
+          setStatus("kb-list", "创建失败: " + e, false);
         }
       }
 
-      async function deleteKb(kbId) {
-        if (!confirm(`确定删除知识库「${kbId}」？将删除其全部索引与本地文档，且不可恢复。`)) return;
+      function deleteKb(kbId) {
+        confirmDialog("删除知识库", `确定删除知识库「${kbId}」？将删除其全部索引与本地文档，且不可恢复。`, async () => {
+          try {
+            await bridge.apiPost("kb/delete", { kb_id: kbId });
+            setStatus("kb-list", `已删除知识库「${kbId}」`, true);
+            refreshKbs();
+            loadDefaults();
+          } catch (e) {
+            setStatus("kb-list", "删除失败: " + e, false);
+          }
+        });
+      }
+
+      function dropIndex(kbId) {
+        confirmDialog("删除索引", `确定删除知识库「${kbId}」的索引？知识库和文档列表会保留，下次导入/重建时自动重新构建。`, async () => {
+          try {
+            await bridge.apiPost("kb/index/delete", { kb_id: kbId });
+            setStatus("kb-list", `已删除「${kbId}」的索引`, true);
+            refreshKbs();
+            if (modalKb === kbId) loadKbModal();
+          } catch (e) {
+            setStatus("kb-list", "删除索引失败: " + e, false);
+          }
+        });
+      }
+
+      // ---------- 知识库配置悬浮窗 ----------
+      function openKbModal(kbId) {
+        modalKb = kbId;
+        $("kb-modal-title").textContent = "知识库「" + kbId + "」";
+        $("kb-modal-status").textContent = "加载中…";
+        $("documents").textContent = "未加载";
+        $("upload-status").textContent = "";
+        $("modal-progress").style.display = "none";
+        $("modal-kb").classList.add("open");
+        bridge.apiPost("kb/select", { kb_id: kbId }).catch(() => {});
+        loadKbModal();
+        pollModalProgress();
+      }
+      $("kb-modal-close").addEventListener("click", () => {
+        $("modal-kb").classList.remove("open");
+        modalKb = null;
+      });
+      $("modal-kb").addEventListener("click", (e) => {
+        if (e.target === $("modal-kb")) { $("modal-kb").classList.remove("open"); modalKb = null; }
+      });
+
+      async function loadKbModal() {
+        if (!modalKb) return;
+        setStatus("kb-modal-status", "加载中…");
         try {
-          const data = await bridge.apiPost("kb/delete", { kb_id: kbId });
-          setStatus("status", "已删除: " + JSON.stringify(data), true);
-          if (selectedKb === kbId) { selectedKb = "default"; $("cur-kb-name").textContent = selectedKb; }
-          bridge.apiPost("kb/select", { kb_id: selectedKb }).catch(() => {});
-          refreshKbs();
-          refreshStatus();
+          const data = await bridge.apiGet("status", { kb_id: modalKb });
+          const lines = [`活动版本: ${data.active_version ? "v" + data.active_version : "无（未构建索引）"}`];
+          if (data.config_changed) lines.push("⚠ 配置已变更，需要重建索引");
+          for (const [v, m] of Object.entries(data.versions || {})) {
+            const cls = m.status === "READY" ? "ok" : m.status === "FAILED" ? "err" : "warn";
+            lines.push(`v${v} [<span class="badge ${cls}">${esc(m.status)}</span>] 文档 ${m.document_count} · 块 ${m.chunk_count}${m.error ? " · " + esc(m.error) : ""}`);
+          }
+          $("kb-modal-status").innerHTML = lines.map((l) => `<div>${l}</div>`).join("");
           loadDocuments();
         } catch (e) {
-          setStatus("status", "删除失败: " + e, false);
+          setStatus("kb-modal-status", "状态获取失败: " + e, false);
         }
       }
-
-      // ---------- 状态 ----------
-      function renderStatus(data) {
-        const lines = [`活动版本: ${data.active_version ? "v" + data.active_version : "无"}`];
-        if (data.config_changed) lines.push("⚠ 配置已变更，需要重建索引");
-        for (const [v, m] of Object.entries(data.versions || {})) {
-          const cls = m.status === "READY" ? "ok" : m.status === "FAILED" ? "err" : "warn";
-          lines.push(`v${v} [<span class="badge ${cls}">${esc(m.status)}</span>] 文档 ${m.document_count} · 块 ${m.chunk_count}${m.error ? " · " + esc(m.error) : ""}`);
-        }
-        $("status").innerHTML = lines.map((l) => `<div>${l}</div>`).join("");
-      }
-
-      async function refreshStatus() {
+      $("kb-modal-rebuild").addEventListener("click", async () => {
+        if (!modalKb) return;
+        setStatus("kb-modal-status", "正在触发重建…");
         try {
-          const data = await bridge.apiGet("status", { kb_id: selectedKb });
-          renderStatus(data);
-        } catch (e) {
-          $("status").textContent = "状态获取失败: " + e;
-        }
-      }
-
-      async function rebuild() {
-        setStatus("status", "正在触发重建…");
-        try {
-          const data = await bridge.apiPost("rebuild", { kb_id: selectedKb });
-          setStatus("status", "重建完成: " + JSON.stringify(data), true);
-          refreshStatus();
+          const data = await bridge.apiPost("rebuild", { kb_id: modalKb });
+          setStatus("kb-modal-status", "重建完成: " + JSON.stringify(data), true);
+          loadKbModal();
           refreshKbs();
         } catch (e) {
-          setStatus("status", "重建失败: " + e, false);
+          setStatus("kb-modal-status", "重建失败: " + e, false);
         }
-      }
+      });
+      $("kb-modal-drop-index").addEventListener("click", () => {
+        if (modalKb) dropIndex(modalKb);
+      });
 
-      async function pollProgress() {
+      async function pollModalProgress() {
+        if (!modalKb) return;
         try {
-          const p = await bridge.apiGet("progress", { kb_id: selectedKb });
+          const p = await bridge.apiGet("progress", { kb_id: modalKb });
           if (p && p.status && p.status !== "idle") {
-            $("progress").style.display = "block";
-            $("progress-text").textContent =
-              `${p.status} · ${p.processed_documents}/${p.total_documents} 文档 · ${p.processed_chunks} 块` +
+            $("modal-progress").style.display = "block";
+            $("modal-progress").textContent =
+              `构建中: ${p.status} · ${p.processed_documents}/${p.total_documents} 文档 · ${p.processed_chunks} 块` +
               (p.error ? " · " + p.error : "");
-            setTimeout(pollProgress, 2000);
+            setTimeout(pollModalProgress, 2000);
           } else {
-            $("progress").style.display = "none";
+            $("modal-progress").style.display = "none";
           }
         } catch (e) { /* ignore transient polling errors */ }
       }
@@ -375,8 +455,8 @@
       // ---------- 上传 ----------
       async function uploadFiles(files) {
         const list = Array.from(files || []);
-        if (!list.length) return;
-        setStatus("upload-status", `上传 ${list.length} 个文件到「${selectedKb}」…`);
+        if (!list.length || !modalKb) return;
+        setStatus("upload-status", `上传 ${list.length} 个文件到「${modalKb}」…`);
         let ok = 0;
         try {
           for (const file of list) {
@@ -384,9 +464,8 @@
             ok++;
           }
           setStatus("upload-status", `已上传 ${ok} 个文件，开始索引…`, true);
-          pollProgress();
-          refreshStatus();
-          loadDocuments();
+          pollModalProgress();
+          loadKbModal();
           refreshKbs();
         } catch (e) {
           setStatus("upload-status", "上传失败: " + e, false);
@@ -414,9 +493,10 @@
 
       // ---------- 文档列表 ----------
       async function loadDocuments() {
+        if (!modalKb) return;
         $("documents").textContent = "加载中…";
         try {
-          const data = await bridge.apiGet("kb/documents", { kb_id: selectedKb });
+          const data = await bridge.apiGet("kb/documents", { kb_id: modalKb });
           const docs = data.documents || [];
           if (!docs.length) { $("documents").textContent = "（空）"; return; }
           $("documents").innerHTML = docs.map((d) => `
@@ -434,21 +514,65 @@
         }
       }
 
-      async function deleteDocument(filename) {
-        if (!confirm(`确定从知识库「${selectedKb}」删除文档「${filename}」？`)) return;
+      function deleteDocument(filename) {
+        confirmDialog("删除文档", `确定从知识库「${modalKb}」删除文档「${filename}」？`, async () => {
+          try {
+            await bridge.apiPost("kb/document/delete", { kb_id: modalKb, filename });
+            setStatus("upload-status", `已删除文档「${filename}」`, true);
+            loadDocuments();
+            loadKbModal();
+            refreshKbs();
+          } catch (e) {
+            setStatus("upload-status", "删除失败: " + e, false);
+          }
+        });
+      }
+
+      // ---------- 默认聚合检索知识库 ----------
+      async function loadDefaults() {
         try {
-          const data = await bridge.apiPost("kb/document/delete", { kb_id: selectedKb, filename });
-          setStatus("upload-status", "已删除: " + JSON.stringify(data), true);
-          loadDocuments();
-          refreshStatus();
-          refreshKbs();
+          const data = await bridge.apiGet("kb/defaults");
+          defaultsKbs = new Set(data.kb_ids || []);
+          renderDefaultChecks();
         } catch (e) {
-          setStatus("upload-status", "删除失败: " + e, false);
+          $("defaults-kbs").textContent = "加载失败: " + e;
         }
       }
 
+      function renderDefaultChecks() {
+        const container = $("defaults-kbs");
+        if (!kbs.length) { container.textContent = "（暂无知识库）"; return; }
+        container.innerHTML = kbs.map((kb) => `
+          <label class="${defaultsKbs.has(kb.kb_id) ? "checked" : ""}" data-kb="${esc(kb.kb_id)}">
+            <input type="checkbox" ${defaultsKbs.has(kb.kb_id) ? "checked" : ""}> ${esc(kb.kb_id)}
+          </label>`).join("");
+        container.querySelectorAll("label[data-kb]").forEach((label) => {
+          label.addEventListener("click", () => {
+            const kbId = label.dataset.kb;
+            if (defaultsKbs.has(kbId)) defaultsKbs.delete(kbId);
+            else defaultsKbs.add(kbId);
+            label.classList.toggle("checked", defaultsKbs.has(kbId));
+          });
+        });
+      }
+      $("btn-defaults-save").addEventListener("click", async () => {
+        try {
+          const data = await bridge.apiPost("kb/defaults", { kb_ids: Array.from(defaultsKbs) });
+          const ids = data.kb_ids || [];
+          setStatus("defaults-status", ids.length ? "已保存默认库: " + ids.join(", ") : "已保存（默认不启用任何知识库）", true);
+        } catch (e) {
+          setStatus("defaults-status", "保存失败: " + e, false);
+        }
+      });
+
       // ---------- 多知识库检索 ----------
-      async function refreshSearchKbs() {
+      function applyDefaultsToSearch() {
+        if (searchKbs.size) return;
+        searchKbs = new Set(defaultsKbs);
+        renderSearchChecks();
+      }
+
+      function renderSearchChecks() {
         const container = $("search-kbs");
         if (!kbs.length) { container.textContent = "（暂无知识库）"; return; }
         container.innerHTML = kbs.map((kb) => `
@@ -561,7 +685,6 @@
           configValues = data.config || configValues;
           renderConfigForm();
           setStatus("config-status", "配置已保存。若 Embedding/分块等索引相关配置有变，重建索引将自动触发。", true);
-          refreshStatus();
         } catch (e) {
           setStatus("config-status", "保存失败: " + e, false);
         }
@@ -574,22 +697,16 @@
         document.documentElement.setAttribute("data-theme", ctx.isDark ? "dark" : "light");
         $("btn-kb-create").onclick = createKb;
         $("btn-kb-refresh").onclick = refreshKbs;
-        $("btn-rebuild").onclick = rebuild;
-        $("btn-kb-delete").onclick = () => deleteKb(selectedKb);
         $("btn-search").onclick = search;
-        $("btn-doc-refresh").onclick = loadDocuments;
         $("btn-config-save").onclick = saveConfig;
         $("query").addEventListener("keydown", (e) => { if (e.key === "Enter") search(); });
         setupDropzone();
-        $("cur-kb-name").textContent = selectedKb;
         refreshKbs();
-        refreshStatus();
-        loadDocuments();
+        loadDefaults();
         loadConfig();
-        pollProgress();
       }
       init().catch((e) => {
-        setStatus("status", "页面初始化失败: " + e, false);
+        setStatus("kb-list", "页面初始化失败: " + e, false);
       });
     })();
   </script>
