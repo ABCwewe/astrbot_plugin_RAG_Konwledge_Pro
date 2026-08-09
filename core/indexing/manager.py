@@ -213,8 +213,17 @@ class IndexManager:
             return await self._rebuild_locked(kb_id, config)
 
     async def sync(self, kb_id: str, config: RAGConfig) -> dict:
-        """Incremental add/update/delete against the active READY index."""
+        """Incremental add/update/delete against the active READY index.
+
+        Holds the per-KB lock so delete_kb/delete_index can never race an
+        in-flight sync (stale registry resurrection after a delete).
+        """
         self._op_counts["sync"] += 1
+        lock = self._locks.setdefault(kb_id, asyncio.Lock())
+        async with lock:
+            return await self._sync_locked(kb_id, config)
+
+    async def _sync_locked(self, kb_id: str, config: RAGConfig) -> dict:
         store = self._manifest_store(kb_id)
         active = await store.load_active()
         manifest = (
@@ -274,35 +283,43 @@ class IndexManager:
         return manifest.collection_name
 
     async def delete_kb(self, kb_id: str) -> None:
-        """Drop every collection belonging to the kb and its local data."""
-        store = self._manifest_store(kb_id)
-        manifests = await store.list_manifests()
-        for manifest in manifests.values():
-            try:
-                await self._store.delete_collection(manifest.collection_name)
-            except QdrantError as exc:
-                logger.warning("[QDRANT] 删除 collection 失败: %s", exc)
-        root = self._kb_root(kb_id)
-        if root.exists():
-            await asyncio.to_thread(shutil.rmtree, root, ignore_errors=True)
-        self._progress.pop(kb_id, None)
+        """Drop every collection belonging to the kb and its local data.
+
+        Holds the per-KB lock so in-flight index operations for this KB finish
+        before deletion (no resurrection / stale registry).
+        """
+        lock = self._locks.setdefault(kb_id, asyncio.Lock())
+        async with lock:
+            store = self._manifest_store(kb_id)
+            manifests = await store.list_manifests()
+            for manifest in manifests.values():
+                try:
+                    await self._store.delete_collection(manifest.collection_name)
+                except QdrantError as exc:
+                    logger.warning("[QDRANT] 删除 collection 失败: %s", exc)
+            root = self._kb_root(kb_id)
+            if root.exists():
+                await asyncio.to_thread(_rmtree_retry, root)
+            self._progress.pop(kb_id, None)
 
     async def delete_index(self, kb_id: str) -> None:
         """Delete only the KB's index (collections + manifests + registry),
         keeping the KB root and its document files."""
-        store = self._manifest_store(kb_id)
-        manifests = await store.list_manifests()
-        for manifest in manifests.values():
-            try:
-                await self._store.delete_collection(manifest.collection_name)
-            except QdrantError as exc:
-                logger.warning("[QDRANT] 删除 collection 失败: %s", exc)
-            await store.delete_manifest(manifest.version)
-        for path in (store.active_path, store.documents_path):
-            if path.exists():
-                await asyncio.to_thread(path.unlink)
-        self._progress.pop(kb_id, None)
-        logger.info("[INDEX] 已删除知识库 %s 的索引（文档保留）", kb_id)
+        lock = self._locks.setdefault(kb_id, asyncio.Lock())
+        async with lock:
+            store = self._manifest_store(kb_id)
+            manifests = await store.list_manifests()
+            for manifest in manifests.values():
+                try:
+                    await self._store.delete_collection(manifest.collection_name)
+                except QdrantError as exc:
+                    logger.warning("[QDRANT] 删除 collection 失败: %s", exc)
+                await store.delete_manifest(manifest.version)
+            for path in (store.active_path, store.documents_path):
+                if path.exists():
+                    await asyncio.to_thread(path.unlink)
+            self._progress.pop(kb_id, None)
+            logger.info("[INDEX] 已删除知识库 %s 的索引（文档保留）", kb_id)
 
     async def status(self, kb_id: str, config: RAGConfig | None = None) -> dict:
         """Human/UI-readable snapshot of a knowledge base."""
@@ -488,6 +505,25 @@ class IndexManager:
             for p in docs_dir.rglob("*")
             if p.is_file() and not p.name.startswith(".")
         )
+
+
+def _rmtree_retry(root: Path, attempts: int = 5, delay: float = 0.2) -> None:
+    """Delete a directory tree robustly (Windows: locked files can make
+    rmtree fail mid-way with ignore_errors silently leaving data behind —
+    which would keep the stale document registry and cause re-uploads to be
+    skipped as "unchanged"). Retries and verifies; raises on final failure."""
+    for attempt in range(attempts):
+        try:
+            shutil.rmtree(root)
+        except OSError as exc:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(delay)
+            continue
+        if not root.exists():
+            return
+        time.sleep(delay)
+    raise OSError(f"无法完全删除目录: {root}")
 
 
 def _now() -> str:

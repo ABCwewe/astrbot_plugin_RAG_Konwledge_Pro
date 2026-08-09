@@ -19,7 +19,7 @@ from pathlib import Path
 
 from .chunking import TextChunker
 from .config import RAGConfig
-from .exceptions import ParserError
+from .exceptions import IndexBusyError, IndexNotFoundError, ParserError
 from .indexing import BuildProgress, IndexManager
 from .models import SearchResult
 from .providers import EmbeddingProvider, RerankerProvider
@@ -251,16 +251,33 @@ class RAGEngine:
     async def _index_wave(self, kb_id: str, inbox_files: list[Path]) -> None:
         docs = self.docs_dir(kb_id)
         docs.mkdir(parents=True, exist_ok=True)
-        moved = 0
+        moved: list[Path] = []
         for src in inbox_files:
             try:
                 os.replace(src, docs / src.name)
-                moved += 1
+                moved.append(src)
             except OSError as exc:
                 logger.warning("[RAG] 移动上传文件失败: %s (%s)", src, exc)
         if moved:
-            logger.info("[RAG] 上传队列波次: kb=%s 文件=%d", kb_id, moved)
-        await self._manager.ensure_index(kb_id, self.config)
+            logger.info("[RAG] 上传队列波次: kb=%s 文件=%d", kb_id, len(moved))
+        try:
+            await self._manager.ensure_index(kb_id, self.config)
+        except IndexBusyError:
+            # 库忙（重建/删除进行中）：文件放回收件箱，下一轮重试
+            if self.kb_root(kb_id).exists():
+                inbox = self.inbox_dir(kb_id)
+                inbox.mkdir(parents=True, exist_ok=True)
+                for src in moved:
+                    try:
+                        os.replace(docs / src.name, src)
+                    except OSError:
+                        pass
+                logger.info("[RAG] 波次重试放回收件箱 (kb=%s)", kb_id)
+            else:
+                logger.info("[RAG] 波次目标知识库已删除，丢弃文件 (kb=%s)", kb_id)
+        except IndexNotFoundError:
+            # 知识库已删除/无索引：丢弃本次波次文件，不复活旧数据
+            logger.info("[RAG] 波次目标知识库已删除，丢弃文件 (kb=%s)", kb_id)
 
     def get_upload_stats(self) -> dict:
         """动态队列状态：收件箱待索引数 + 索引限流统计。"""
