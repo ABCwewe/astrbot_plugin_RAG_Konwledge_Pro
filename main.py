@@ -135,7 +135,10 @@ class RAGPlugin(Star):
             return
         from astrbot.core.agent.message import TextPart
 
-        req.extra_user_content_parts.append(TextPart(text=context).mark_as_temp())
+        # 标注注入来源，避免模型把自动检索结果当作用户消息的一部分
+        req.extra_user_content_parts.append(
+            TextPart(text=f"RAG Auto Search Result:\n{context}").mark_as_temp()
+        )
         logger.debug("[RAG] 已注入自动图片检索上下文 (%d 字符)", len(context))
 
     @filter.llm_tool(name="rag_search")
