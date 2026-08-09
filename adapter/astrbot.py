@@ -334,6 +334,9 @@ class AstrBotRAGAdapter:
 
     async def llm_search(self, query: str) -> str | None:
         """LLM tool entry point: returns RAG context or None (no noise)."""
+        if not self.default_kb:
+            # default_kb_id 留空 = 禁用默认知识库：工具静默跳过
+            return None
         try:
             results = await self.search(self.default_kb, query)
         except RAGError as exc:
@@ -354,6 +357,9 @@ class AstrBotRAGAdapter:
         try:
             engine = self._require_engine()
             if not engine.config.image.enabled or not engine.config.image.auto_search:
+                return None
+            if not self.default_kb:
+                # default_kb_id 留空 = 禁用默认知识库：自动图片检索静默跳过
                 return None
         except RuntimeError:
             return None

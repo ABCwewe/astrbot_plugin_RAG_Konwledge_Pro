@@ -115,6 +115,10 @@ class RAGEngine:
     # -- knowledge base management ----------------------------------------
 
     def kb_root(self, kb_id: str) -> Path:
+        from .exceptions import ConfigurationError
+
+        if not kb_id or not kb_id.strip():
+            raise ConfigurationError("知识库 ID 不能为空")
         safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in kb_id)
         return self._data_root / "kbs" / safe
 

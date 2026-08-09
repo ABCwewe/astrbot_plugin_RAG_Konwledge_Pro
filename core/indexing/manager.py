@@ -103,6 +103,8 @@ class IndexManager:
     # -- paths ------------------------------------------------------------
 
     def _kb_root(self, kb_id: str) -> Path:
+        if not kb_id or not kb_id.strip():
+            raise ConfigurationError("知识库 ID 不能为空")
         safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in kb_id)
         # 所有知识库统一放在 <data_root>/kbs/ 下，与 tmp/、cache.db 等
         # 引擎级目录同级隔离。
