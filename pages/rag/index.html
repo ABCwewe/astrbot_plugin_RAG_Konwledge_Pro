@@ -33,7 +33,7 @@
       border: 1px solid var(--border); background: var(--card); color: var(--text);
       font-size: 14px;
     }
-    input[type=text] { flex: 1; min-width: 160px; }
+    input[type=text] { min-width: 160px; }
     button {
       padding: 8px 14px; border-radius: 6px; border: 1px solid var(--border);
       background: var(--card); color: var(--text); cursor: pointer; font-size: 14px;
@@ -56,6 +56,26 @@
     .status { margin-top: 8px; min-height: 20px; color: var(--muted); }
     #progress { display: none; }
 
+    /* 顶部子页 Tab */
+    .tabs { display: flex; gap: 6px; margin-bottom: 16px; flex-wrap: wrap; }
+    .tab-btn {
+      padding: 9px 18px; border-radius: 8px; border: 1px solid var(--border);
+      background: var(--card); color: var(--muted); cursor: pointer; font-size: 14px;
+    }
+    .tab-btn.active { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+    .panel { display: none; }
+    .panel.active { display: block; }
+
+    /* 知识库列表 */
+    .kb-list { display: flex; flex-direction: column; gap: 8px; }
+    .kb-item {
+      display: flex; align-items: center; gap: 10px;
+      border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
+    }
+    .kb-item.selected { border-color: var(--accent); background: var(--drop); }
+    .kb-name { font-weight: 600; min-width: 120px; }
+    .kb-stats { color: var(--muted); font-size: 12px; flex: 1; }
+
     /* 拖拽上传区 */
     .dropzone {
       border: 2px dashed var(--border); border-radius: 10px;
@@ -73,6 +93,16 @@
     .doc-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .doc-size { color: var(--muted); font-size: 12px; white-space: nowrap; }
 
+    /* 多知识库选择 */
+    .kb-check { display: flex; gap: 10px; flex-wrap: wrap; }
+    .kb-check label {
+      display: flex; align-items: center; gap: 6px; padding: 6px 12px;
+      border: 1px solid var(--border); border-radius: 8px; cursor: pointer;
+      color: var(--text); font-size: 13px;
+    }
+    .kb-check label.checked { border-color: var(--accent); background: var(--drop); }
+    .kb-check input { width: 15px; height: 15px; }
+
     /* 配置表单 */
     fieldset {
       border: 1px solid var(--border); border-radius: 8px;
@@ -89,61 +119,83 @@
 <body>
   <h1>增强 RAG 知识库</h1>
 
-  <!-- 知识库管理 -->
-  <div class="card">
-    <div class="row">
-      <label>知识库</label>
-      <input type="text" id="kb" list="kb-list" placeholder="选择或输入知识库 ID">
-      <datalist id="kb-list"></datalist>
-      <button class="primary" id="btn-status">刷新</button>
-      <button id="btn-rebuild">重建索引</button>
-      <button class="danger" id="btn-kb-delete">删除知识库</button>
-    </div>
-    <div id="status" class="status"></div>
+  <div class="tabs">
+    <button class="tab-btn active" data-tab="kb">知识库管理</button>
+    <button class="tab-btn" data-tab="search">检索</button>
+    <button class="tab-btn" data-tab="config">配置</button>
   </div>
 
-  <!-- 上传（支持拖拽） -->
-  <div class="card">
-    <h2>上传文档</h2>
-    <div class="dropzone" id="dropzone">
-      拖拽文件到此处，或点击选择（txt / md / pdf / 图片，支持多选）
+  <!-- ============ 知识库管理 ============ -->
+  <div class="panel active" id="panel-kb">
+    <div class="card">
+      <h2>知识库列表</h2>
+      <div class="row" style="margin-bottom:12px">
+        <input type="text" id="new-kb" placeholder="新知识库 ID">
+        <button class="primary" id="btn-kb-create">新建知识库</button>
+        <button id="btn-kb-refresh">刷新列表</button>
+      </div>
+      <div id="kb-list" class="kb-list status">加载中…</div>
     </div>
-    <input type="file" id="files" multiple accept=".txt,.md,.markdown,.pdf,.png,.jpg,.jpeg,.webp,.bmp,.gif" style="display:none">
-    <div id="upload-status" class="status"></div>
+
+    <div class="card">
+      <div class="row" style="margin-bottom:12px">
+        <h2 style="flex:1">当前知识库: <span id="cur-kb-name">-</span></h2>
+        <button id="btn-rebuild">重建索引</button>
+        <button class="danger" id="btn-kb-delete">删除该知识库</button>
+      </div>
+      <div id="status" class="status"></div>
+    </div>
+
+    <div class="card">
+      <h2>上传文档（拖拽到此处，或点击选择）</h2>
+      <div class="dropzone" id="dropzone">
+        支持 txt / md / pdf / 图片，可多选；文件只进入当前知识库
+      </div>
+      <input type="file" id="files" multiple accept=".txt,.md,.markdown,.pdf,.png,.jpg,.jpeg,.webp,.bmp,.gif" style="display:none">
+      <div id="upload-status" class="status"></div>
+    </div>
+
+    <div class="card">
+      <div class="row" style="margin-bottom:12px">
+        <h2 style="flex:1">文档列表（当前知识库）</h2>
+        <button id="btn-doc-refresh">刷新</button>
+      </div>
+      <div id="documents" class="status">未加载</div>
+    </div>
+
+    <div class="card" id="progress" style="display:none">
+      <div class="row"><label>重建进度</label><div id="progress-text" class="status"></div></div>
+    </div>
   </div>
 
-  <!-- 文档列表 -->
-  <div class="card">
-    <div class="row">
-      <h2 style="flex:1">已有文档</h2>
-      <button id="btn-doc-refresh">刷新</button>
+  <!-- ============ 检索 ============ -->
+  <div class="panel" id="panel-search">
+    <div class="card">
+      <h2>选择知识库（可多选）</h2>
+      <div id="search-kbs" class="kb-check status">加载中…</div>
     </div>
-    <div id="documents" class="status">未加载</div>
+    <div class="card">
+      <div class="row">
+        <input type="text" id="query" placeholder="输入问题，跨知识库检索…" style="flex:1">
+        <label>保留数量</label>
+        <input type="number" id="top-n" min="1" max="30" value="6" style="width:80px">
+        <button class="primary" id="btn-search">检索</button>
+      </div>
+      <div id="search-status" class="status"></div>
+      <div id="results"></div>
+    </div>
   </div>
 
-  <!-- 检索 -->
-  <div class="card">
-    <h2>检索测试</h2>
-    <div class="row">
-      <input type="text" id="query" placeholder="输入问题，检索知识库…">
-      <button class="primary" id="btn-search">检索</button>
+  <!-- ============ 配置 ============ -->
+  <div class="panel" id="panel-config">
+    <div class="card">
+      <div class="row" style="margin-bottom:12px">
+        <h2 style="flex:1">配置</h2>
+        <button class="primary" id="btn-config-save">保存配置</button>
+      </div>
+      <div id="config-form"></div>
+      <div id="config-status" class="status"></div>
     </div>
-    <div id="search-status" class="status"></div>
-    <div id="results"></div>
-  </div>
-
-  <!-- 配置 -->
-  <div class="card">
-    <div class="row" style="margin-bottom:12px">
-      <h2 style="flex:1">配置</h2>
-      <button class="primary" id="btn-config-save">保存配置</button>
-    </div>
-    <div id="config-form"></div>
-    <div id="config-status" class="status"></div>
-  </div>
-
-  <div class="card" id="progress" style="display:none">
-    <div class="row"><label>重建进度</label><div id="progress-text" class="status"></div></div>
   </div>
 
   <script>
@@ -164,11 +216,14 @@
       }
 
       const $ = (id) => document.getElementById(id);
-      const KB = () => ($("kb").value.trim() || "default");
       const GROUP_TITLES = {
         general: "基础", qdrant: "Qdrant 存储", embedding: "文本 Embedding",
         rerank: "Reranker", chunking: "分块", retrieval: "检索", image: "图片检索",
       };
+      let bridge = null;
+      let kbs = [];
+      let selectedKb = "default";
+      let searchKbs = new Set();
       let schema = {};
       let groups = [];
       let groupMembers = {};
@@ -193,6 +248,83 @@
         return (bytes / 1048576).toFixed(1) + " MB";
       }
 
+      // ---------- 子页切换 ----------
+      document.querySelectorAll(".tab-btn").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          document.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("active", b === btn));
+          document.querySelectorAll(".panel").forEach((p) => p.classList.toggle("active", p.id === "panel-" + btn.dataset.tab));
+          if (btn.dataset.tab === "search") refreshSearchKbs();
+        });
+      });
+
+      // ---------- 知识库列表 ----------
+      async function refreshKbs() {
+        $("kb-list").textContent = "加载中…";
+        try {
+          kbs = await bridge.apiGet("list") || [];
+          if (!kbs.length) { $("kb-list").textContent = "（暂无知识库，可新建）"; }
+          else {
+            $("kb-list").innerHTML = kbs.map((kb) => {
+              const cls = kb.status === "READY" ? "ok" : kb.status === "FAILED" ? "err" : "warn";
+              const sel = kb.kb_id === selectedKb ? "selected" : "";
+              return `<div class="kb-item ${sel}" data-kb="${esc(kb.kb_id)}">
+                <span class="kb-name">${esc(kb.kb_id)}</span>
+                <span class="badge ${cls}">${esc(kb.status)}</span>
+                <span class="kb-stats">v${kb.active_version ?? "-"} · 文档 ${kb.document_count} · 块 ${kb.chunk_count}</span>
+                <button class="primary" data-act="select">选择</button>
+                <button class="danger" data-act="delete">删除</button>
+              </div>`;
+            }).join("");
+            $("kb-list").querySelectorAll(".kb-item").forEach((item) => {
+              const kbId = item.dataset.kb;
+              item.querySelector('[data-act="select"]').addEventListener("click", () => selectKb(kbId));
+              item.querySelector('[data-act="delete"]').addEventListener("click", () => deleteKb(kbId));
+            });
+          }
+          refreshSearchKbs();
+        } catch (e) {
+          $("kb-list").textContent = "列表加载失败: " + e;
+        }
+      }
+
+      function selectKb(kbId) {
+        selectedKb = kbId;
+        $("cur-kb-name").textContent = kbId;
+        // 上传接口无法携带参数，先把当前知识库告知后端（bridge 限制）
+        bridge.apiPost("kb/select", { kb_id: kbId }).catch(() => {});
+        refreshKbs();
+        refreshStatus();
+        loadDocuments();
+      }
+
+      async function createKb() {
+        const kbId = $("new-kb").value.trim();
+        if (!kbId) { setStatus("status", "请输入知识库 ID", false); return; }
+        try {
+          const data = await bridge.apiPost("kb/create", { kb_id: kbId });
+          setStatus("status", "已创建: " + JSON.stringify(data), true);
+          $("new-kb").value = "";
+          selectKb(kbId);
+        } catch (e) {
+          setStatus("status", "创建失败: " + e, false);
+        }
+      }
+
+      async function deleteKb(kbId) {
+        if (!confirm(`确定删除知识库「${kbId}」？将删除其全部索引与本地文档，且不可恢复。`)) return;
+        try {
+          const data = await bridge.apiPost("kb/delete", { kb_id: kbId });
+          setStatus("status", "已删除: " + JSON.stringify(data), true);
+          if (selectedKb === kbId) { selectedKb = "default"; $("cur-kb-name").textContent = selectedKb; }
+          bridge.apiPost("kb/select", { kb_id: selectedKb }).catch(() => {});
+          refreshKbs();
+          refreshStatus();
+          loadDocuments();
+        } catch (e) {
+          setStatus("status", "删除失败: " + e, false);
+        }
+      }
+
       // ---------- 状态 ----------
       function renderStatus(data) {
         const lines = [`活动版本: ${data.active_version ? "v" + data.active_version : "无"}`];
@@ -204,68 +336,36 @@
         $("status").innerHTML = lines.map((l) => `<div>${l}</div>`).join("");
       }
 
-      async function refreshStatus(bridge) {
-        setStatus("status", "加载中…");
+      async function refreshStatus() {
         try {
-          const data = await bridge.apiGet("status", { kb_id: KB() });
+          const data = await bridge.apiGet("status", { kb_id: selectedKb });
           renderStatus(data);
-          setStatus("status", "", true);
         } catch (e) {
-          setStatus("status", "状态获取失败: " + e, false);
+          $("status").textContent = "状态获取失败: " + e;
         }
       }
 
-      // ---------- 知识库列表 ----------
-      async function refreshKbList(bridge) {
-        try {
-          const kbs = await bridge.apiGet("list");
-          const datalist = $("kb-list");
-          datalist.innerHTML = "";
-          for (const kb of kbs || []) {
-            const opt = document.createElement("option");
-            opt.value = kb.kb_id;
-            datalist.appendChild(opt);
-          }
-        } catch (e) { /* 非致命：datalist 只是提示 */ }
-      }
-
-      async function rebuild(bridge) {
+      async function rebuild() {
         setStatus("status", "正在触发重建…");
         try {
-          const data = await bridge.apiPost("rebuild", { kb_id: KB() });
-          setStatus("status", "重建完成: " + JSON.stringify(data));
-          refreshStatus(bridge);
+          const data = await bridge.apiPost("rebuild", { kb_id: selectedKb });
+          setStatus("status", "重建完成: " + JSON.stringify(data), true);
+          refreshStatus();
+          refreshKbs();
         } catch (e) {
           setStatus("status", "重建失败: " + e, false);
         }
       }
 
-      async function deleteKb(bridge) {
-        const kb = KB();
-        if (!confirm(`确定删除知识库「${kb}」？将删除其全部索引与本地文档，且不可恢复。`)) return;
-        setStatus("status", "删除中…");
+      async function pollProgress() {
         try {
-          const data = await bridge.apiPost("kb/delete", { kb_id: kb });
-          setStatus("status", "已删除: " + JSON.stringify(data), true);
-          $("kb").value = "default";
-          refreshKbList(bridge);
-          refreshStatus(bridge);
-          loadDocuments(bridge);
-        } catch (e) {
-          setStatus("status", "删除失败: " + e, false);
-        }
-      }
-
-      // ---------- 进度 ----------
-      async function pollProgress(bridge) {
-        try {
-          const p = await bridge.apiGet("progress", { kb_id: KB() });
+          const p = await bridge.apiGet("progress", { kb_id: selectedKb });
           if (p && p.status && p.status !== "idle") {
             $("progress").style.display = "block";
             $("progress-text").textContent =
               `${p.status} · ${p.processed_documents}/${p.total_documents} 文档 · ${p.processed_chunks} 块` +
               (p.error ? " · " + p.error : "");
-            setTimeout(() => pollProgress(bridge), 2000);
+            setTimeout(pollProgress, 2000);
           } else {
             $("progress").style.display = "none";
           }
@@ -273,10 +373,10 @@
       }
 
       // ---------- 上传 ----------
-      async function uploadFiles(bridge, files) {
+      async function uploadFiles(files) {
         const list = Array.from(files || []);
         if (!list.length) return;
-        setStatus("upload-status", `上传 ${list.length} 个文件…`);
+        setStatus("upload-status", `上传 ${list.length} 个文件到「${selectedKb}」…`);
         let ok = 0;
         try {
           for (const file of list) {
@@ -284,20 +384,21 @@
             ok++;
           }
           setStatus("upload-status", `已上传 ${ok} 个文件，开始索引…`, true);
-          pollProgress(bridge);
-          refreshStatus(bridge);
-          loadDocuments(bridge);
+          pollProgress();
+          refreshStatus();
+          loadDocuments();
+          refreshKbs();
         } catch (e) {
           setStatus("upload-status", "上传失败: " + e, false);
         }
         $("files").value = "";
       }
 
-      function setupDropzone(bridge) {
+      function setupDropzone() {
         const zone = $("dropzone");
         const input = $("files");
         zone.addEventListener("click", () => input.click());
-        input.addEventListener("change", () => uploadFiles(bridge, input.files));
+        input.addEventListener("change", () => uploadFiles(input.files));
         ["dragenter", "dragover"].forEach((evt) => {
           zone.addEventListener(evt, (e) => { e.preventDefault(); zone.classList.add("dragover"); });
         });
@@ -306,16 +407,16 @@
         });
         zone.addEventListener("drop", (e) => {
           if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) {
-            uploadFiles(bridge, e.dataTransfer.files);
+            uploadFiles(e.dataTransfer.files);
           }
         });
       }
 
       // ---------- 文档列表 ----------
-      async function loadDocuments(bridge) {
+      async function loadDocuments() {
         $("documents").textContent = "加载中…";
         try {
-          const data = await bridge.apiGet("kb/documents", { kb_id: KB() });
+          const data = await bridge.apiGet("kb/documents", { kb_id: selectedKb });
           const docs = data.documents || [];
           if (!docs.length) { $("documents").textContent = "（空）"; return; }
           $("documents").innerHTML = docs.map((d) => `
@@ -326,44 +427,66 @@
               <button class="danger" data-doc="${esc(d.filename)}">删除</button>
             </div>`).join("");
           $("documents").querySelectorAll("button[data-doc]").forEach((btn) => {
-            btn.addEventListener("click", () => deleteDocument(bridge, btn.getAttribute("data-doc")));
+            btn.addEventListener("click", () => deleteDocument(btn.getAttribute("data-doc")));
           });
         } catch (e) {
           $("documents").textContent = "文档列表加载失败: " + e;
         }
       }
 
-      async function deleteDocument(bridge, filename) {
-        if (!confirm(`确定从知识库删除文档「${filename}」？`)) return;
+      async function deleteDocument(filename) {
+        if (!confirm(`确定从知识库「${selectedKb}」删除文档「${filename}」？`)) return;
         try {
-          const data = await bridge.apiPost("kb/document/delete", { kb_id: KB(), filename });
+          const data = await bridge.apiPost("kb/document/delete", { kb_id: selectedKb, filename });
           setStatus("upload-status", "已删除: " + JSON.stringify(data), true);
-          loadDocuments(bridge);
-          refreshStatus(bridge);
+          loadDocuments();
+          refreshStatus();
+          refreshKbs();
         } catch (e) {
           setStatus("upload-status", "删除失败: " + e, false);
         }
       }
 
-      // ---------- 检索 ----------
-      async function search(bridge) {
+      // ---------- 多知识库检索 ----------
+      async function refreshSearchKbs() {
+        const container = $("search-kbs");
+        if (!kbs.length) { container.textContent = "（暂无知识库）"; return; }
+        container.innerHTML = kbs.map((kb) => `
+          <label class="${searchKbs.has(kb.kb_id) ? "checked" : ""}" data-kb="${esc(kb.kb_id)}">
+            <input type="checkbox" ${searchKbs.has(kb.kb_id) ? "checked" : ""}> ${esc(kb.kb_id)}
+          </label>`).join("");
+        container.querySelectorAll("label[data-kb]").forEach((label) => {
+          label.addEventListener("click", () => {
+            const kbId = label.dataset.kb;
+            if (searchKbs.has(kbId)) searchKbs.delete(kbId);
+            else searchKbs.add(kbId);
+            label.classList.toggle("checked", searchKbs.has(kbId));
+          });
+        });
+      }
+
+      async function search() {
         const q = $("query").value.trim();
         if (!q) return;
+        const kbIds = Array.from(searchKbs);
+        if (!kbIds.length) { setStatus("search-status", "请先选择至少一个知识库", false); return; }
+        const topN = Math.max(1, Math.min(30, Number($("top-n").value) || 6));
         setStatus("search-status", "检索中…");
         $("results").innerHTML = "";
         try {
-          const data = await bridge.apiGet("search", { kb_id: KB(), q, top_n: 6 });
+          const data = await bridge.apiGet("search", { kb_ids: kbIds.join(","), q, top_n: topN });
           const results = data.results || [];
           if (!results.length) { setStatus("search-status", "未检索到相关内容。", false); return; }
-          setStatus("search-status", `检索到 ${results.length} 条：`, true);
+          setStatus("search-status", `跨 ${kbIds.length} 个知识库检索到 ${results.length} 条：`, true);
           $("results").innerHTML = results.map((r) => {
             const source = (r.metadata && r.metadata.source) || r.document_id;
             const page = r.metadata && r.metadata.page;
+            const kbId = (r.metadata && r.metadata.kb_id) || "";
             const score = r.rerank_score != null
               ? `向量 ${r.vector_score.toFixed(4)} / 重排 ${r.rerank_score.toFixed(4)}`
               : `向量 ${r.vector_score.toFixed(4)}`;
             const body = r.content || (r.image_path ? `[图片: ${r.image_path}]` : "（无内容）");
-            return `<div class="result-item"><div class="meta">[${esc(source)}${page ? ", Page " + page : ""}] · ${esc(score)}</div><div>${esc(body)}</div></div>`;
+            return `<div class="result-item"><div class="meta">[${esc(kbId)}] [${esc(source)}${page ? ", Page " + page : ""}] · ${esc(score)}</div><div>${esc(body)}</div></div>`;
           }).join("");
         } catch (e) {
           setStatus("search-status", "检索失败: " + e, false);
@@ -402,7 +525,7 @@
         $("config-form").innerHTML = html;
       }
 
-      async function loadConfig(bridge) {
+      async function loadConfig() {
         setStatus("config-status", "加载配置…");
         try {
           const data = await bridge.apiGet("config");
@@ -411,27 +534,23 @@
           groupMembers = data.group_members || {};
           configValues = data.config || {};
           renderConfigForm();
+          const cfgTopN = Number(configValues.top_n);
+          if (cfgTopN > 0) $("top-n").value = cfgTopN;
           setStatus("config-status", "", true);
         } catch (e) {
           setStatus("config-status", "配置加载失败: " + e, false);
         }
       }
 
-      async function saveConfig(bridge) {
+      async function saveConfig() {
         const patch = {};
         for (const key of Object.keys(schema)) {
           const input = document.getElementById("cfg_" + key);
           if (!input) continue;
           const type = (schema[key] || {}).type || "string";
-          if (type === "bool") {
-            patch[key] = input.checked;
-          } else if (type === "int") {
-            patch[key] = input.value === "" ? null : Number(input.value);
-          } else if (type === "float") {
-            patch[key] = input.value === "" ? null : Number(input.value);
-          } else {
-            patch[key] = input.value;
-          }
+          if (type === "bool") patch[key] = input.checked;
+          else if (type === "int" || type === "float") patch[key] = input.value === "" ? null : Number(input.value);
+          else patch[key] = input.value;
         }
         setStatus("config-status", "保存中…");
         try {
@@ -442,7 +561,7 @@
           configValues = data.config || configValues;
           renderConfigForm();
           setStatus("config-status", "配置已保存。若 Embedding/分块等索引相关配置有变，重建索引将自动触发。", true);
-          refreshStatus(bridge);
+          refreshStatus();
         } catch (e) {
           setStatus("config-status", "保存失败: " + e, false);
         }
@@ -450,23 +569,24 @@
 
       // ---------- 启动 ----------
       async function init() {
-        const bridge = await waitForBridge();
+        bridge = await waitForBridge();
         const ctx = await bridge.ready();
         document.documentElement.setAttribute("data-theme", ctx.isDark ? "dark" : "light");
-        $("btn-status").onclick = () => { refreshStatus(bridge); loadDocuments(bridge); };
-        $("btn-rebuild").onclick = () => rebuild(bridge);
-        $("btn-kb-delete").onclick = () => deleteKb(bridge);
-        $("btn-search").onclick = () => search(bridge);
-        $("btn-doc-refresh").onclick = () => loadDocuments(bridge);
-        $("btn-config-save").onclick = () => saveConfig(bridge);
-        $("query").addEventListener("keydown", (e) => { if (e.key === "Enter") search(bridge); });
-        $("kb").addEventListener("change", () => { refreshStatus(bridge); loadDocuments(bridge); });
-        setupDropzone(bridge);
-        refreshKbList(bridge);
-        refreshStatus(bridge);
-        loadDocuments(bridge);
-        loadConfig(bridge);
-        pollProgress(bridge);
+        $("btn-kb-create").onclick = createKb;
+        $("btn-kb-refresh").onclick = refreshKbs;
+        $("btn-rebuild").onclick = rebuild;
+        $("btn-kb-delete").onclick = () => deleteKb(selectedKb);
+        $("btn-search").onclick = search;
+        $("btn-doc-refresh").onclick = loadDocuments;
+        $("btn-config-save").onclick = saveConfig;
+        $("query").addEventListener("keydown", (e) => { if (e.key === "Enter") search(); });
+        setupDropzone();
+        $("cur-kb-name").textContent = selectedKb;
+        refreshKbs();
+        refreshStatus();
+        loadDocuments();
+        loadConfig();
+        pollProgress();
       }
       init().catch((e) => {
         setStatus("status", "页面初始化失败: " + e, false);

@@ -72,6 +72,18 @@ class AstrBotRAGAdapter:
         self._data_dir: Path | None = None
         self._tmp_dir: Path | None = None
         self.default_kb = str(self._cfg.get("default_kb_id", "default"))
+        self._selected_kb: str | None = None
+
+    @property
+    def current_kb(self) -> str:
+        """知识库上传目标：WebUI 显式选择优先，否则默认知识库。"""
+        return self._selected_kb or self.default_kb
+
+    def select_kb(self, kb_id: str) -> str:
+        """Set the WebUI's current knowledge base (upload target)."""
+        kb_id = (kb_id or "").strip()
+        self._selected_kb = kb_id or None
+        return self.current_kb
 
     # -- lifecycle --------------------------------------------------------
 
@@ -195,6 +207,23 @@ class AstrBotRAGAdapter:
     ):
         return await self._require_engine().search(
             kb_id,
+            query,
+            top_k=top_k,
+            top_n=top_n,
+            include_images=include_images,
+        )
+
+    async def search_multi(
+        self,
+        kb_ids: list[str],
+        query: str,
+        *,
+        top_k: int | None = None,
+        top_n: int | None = None,
+        include_images: bool | None = None,
+    ):
+        return await self._require_engine().search_multi(
+            kb_ids,
             query,
             top_k=top_k,
             top_n=top_n,
@@ -355,6 +384,13 @@ class AstrBotRAGAdapter:
 
     async def delete_kb(self, kb_id: str) -> None:
         await self._require_engine().delete_kb(kb_id)
+
+    async def create_kb(self, kb_id: str) -> dict:
+        if not kb_id or not kb_id.strip():
+            from ..core.exceptions import ConfigurationError
+
+            raise ConfigurationError("知识库 ID 不能为空")
+        return await self._require_engine().create_kb(kb_id.strip())
 
     async def list_documents(self, kb_id: str) -> list[dict]:
         return await self._require_engine().list_documents(kb_id)

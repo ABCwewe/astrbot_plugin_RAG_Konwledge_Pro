@@ -163,7 +163,7 @@ class Indexer:
         if not chunks:
             raise ValueError("文档解析后没有可索引的块")
 
-        points = await self._build_points(chunks)
+        points = await self._build_points(chunks, kb_id)
         await self._store.upsert(collection, points)
         vector_names = sorted({name for p in points for name in p.vectors})
         logger.info(
@@ -234,7 +234,7 @@ class Indexer:
             img_idx += 1
         return chunks
 
-    async def _build_points(self, chunks: list[Chunk]) -> list[VectorPoint]:
+    async def _build_points(self, chunks: list[Chunk], kb_id: str) -> list[VectorPoint]:
         text_chunks = [c for c in chunks if c.type == "text"]
         image_chunks = [c for c in chunks if c.type == "image"]
 
@@ -254,6 +254,7 @@ class Indexer:
                     payload={
                         "chunk_id": chunk.id,
                         "document_id": chunk.document_id,
+                        "kb_id": kb_id,
                         "type": "text",
                         "content": chunk.content,
                         "source": chunk.metadata.get("source"),
@@ -270,6 +271,7 @@ class Indexer:
                     payload={
                         "chunk_id": chunk.id,
                         "document_id": chunk.document_id,
+                        "kb_id": kb_id,
                         "type": "image",
                         "image_path": chunk.image_path,
                         "source": chunk.metadata.get("source"),

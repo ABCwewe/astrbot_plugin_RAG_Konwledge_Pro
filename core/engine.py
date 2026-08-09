@@ -223,6 +223,54 @@ class RAGEngine:
             include_images=include_images,
         )
 
+    async def search_multi(
+        self,
+        kb_ids: list[str],
+        query: str,
+        *,
+        top_k: int | None = None,
+        top_n: int | None = None,
+        include_images: bool | None = None,
+    ) -> list[SearchResult]:
+        """Search several knowledge bases at once; results are aggregated by
+        match score (vector Top-K per KB → merged → one rerank → Top-N).
+
+        KBs without a READY index are skipped; if none is usable an
+        :class:`~core.exceptions.IndexNotFoundError` is raised.
+        """
+        from .exceptions import IndexNotFoundError
+
+        kb_ids = [kb for kb in kb_ids if kb and kb.strip()]
+        if not kb_ids:
+            return []
+        collections: list[str] = []
+        skipped: list[str] = []
+        for kb_id in kb_ids:
+            collection = await self._manager.active_collection(kb_id)
+            if collection is not None:
+                collections.append(collection)
+            else:
+                skipped.append(kb_id)
+        if not collections:
+            raise IndexNotFoundError(
+                f"所选知识库均未构建索引: {', '.join(kb_ids)}"
+            )
+        if skipped:
+            logger.warning("[RAG] 以下知识库无可用索引，已跳过: %s", ", ".join(skipped))
+        return await self._retriever.retrieve_from_collections(
+            collections,
+            query,
+            top_k=top_k,
+            top_n=top_n,
+            include_images=include_images,
+        )
+
+    # -- knowledge base management ----------------------------------------
+
+    async def create_kb(self, kb_id: str) -> dict:
+        """Create an empty knowledge base (empty READY index)."""
+        return await self._manager.ensure_index(kb_id, self.config)
+
     # -- context formatting -----------------------------------------------
 
     @staticmethod

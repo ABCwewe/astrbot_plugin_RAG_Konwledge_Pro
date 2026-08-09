@@ -46,6 +46,8 @@ class RAGPlugin(Star):
         ctx.register_web_api(f"/{ROUTE_PREFIX}/config", self.web_config_get, ["GET"], "RAG 配置读取")
         ctx.register_web_api(f"/{ROUTE_PREFIX}/config", self.web_config_update, ["POST"], "RAG 配置保存")
         ctx.register_web_api(f"/{ROUTE_PREFIX}/kb/delete", self.web_kb_delete, ["POST"], "RAG 删除知识库")
+        ctx.register_web_api(f"/{ROUTE_PREFIX}/kb/create", self.web_kb_create, ["POST"], "RAG 新建知识库")
+        ctx.register_web_api(f"/{ROUTE_PREFIX}/kb/select", self.web_kb_select, ["POST"], "RAG 选择当前知识库")
         ctx.register_web_api(f"/{ROUTE_PREFIX}/kb/documents", self.web_kb_documents, ["GET"], "RAG 知识库文档列表")
         ctx.register_web_api(f"/{ROUTE_PREFIX}/kb/document/delete", self.web_kb_document_delete, ["POST"], "RAG 删除知识库文档")
         logger.info("[RAG] 插件已加载，路由前缀 /%s", ROUTE_PREFIX)
@@ -128,10 +130,15 @@ class RAGPlugin(Star):
 
     async def web_search(self):
         try:
-            kb = request.query.get("kb_id", self.adapter.default_kb)
             query = request.query.get("q", "")
             top_n = request.query.get("top_n", None, type=int)
-            results = await self.adapter.search(kb, query, top_n=top_n)
+            kb_ids_raw = request.query.get("kb_ids", "")
+            kb_ids = [k.strip() for k in kb_ids_raw.split(",") if k.strip()]
+            if kb_ids:
+                results = await self.adapter.search_multi(kb_ids, query, top_n=top_n)
+            else:
+                kb = request.query.get("kb_id", self.adapter.default_kb)
+                results = await self.adapter.search(kb, query, top_n=top_n)
             return json_response(
                 {
                     "results": [
@@ -154,7 +161,9 @@ class RAGPlugin(Star):
 
     async def web_ingest(self):
         try:
-            kb = request.query.get("kb_id", self.adapter.default_kb)
+            # 上传接口无法携带查询参数（bridge 限制），目标知识库由
+            # kb/select 设置（request.query 仍兼容旧调用方）。
+            kb = request.query.get("kb_id") or self.adapter.current_kb
             files = await request.files()
             if not files:
                 return error_response("未收到文件", status_code=400)
@@ -233,6 +242,25 @@ class RAGPlugin(Star):
             return json_response({"deleted": kb})
         except Exception as exc:
             logger.exception("[RAG] web/kb/delete 失败")
+            return error_response(str(exc))
+
+    async def web_kb_create(self):
+        try:
+            body = await request.json(default={})
+            kb = (body or {}).get("kb_id", "").strip()
+            result = await self.adapter.create_kb(kb)
+            return json_response({"created": kb, "index": result})
+        except Exception as exc:
+            logger.exception("[RAG] web/kb/create 失败")
+            return error_response(str(exc))
+
+    async def web_kb_select(self):
+        try:
+            body = await request.json(default={})
+            kb = self.adapter.select_kb((body or {}).get("kb_id", ""))
+            return json_response({"selected": kb})
+        except Exception as exc:
+            logger.exception("[RAG] web/kb/select 失败")
             return error_response(str(exc))
 
     async def web_kb_documents(self):

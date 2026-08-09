@@ -1,5 +1,11 @@
 """Retriever — Top-K vector search → rerank → Top-N (AGENTS.md §24-§26).
 
+Supports both single-collection and multi-collection retrieval: for multiple
+knowledge bases the query embedding is computed once, each collection
+contributes its Top-K hits, the pools are merged and de-duplicated by vector
+score, and the combined candidates are reranked in ONE call before Top-N is
+returned (aggregation by match score).
+
 Text queries search the ``text`` named vector by default. When image search
 is enabled, the same query embedding also searches the ``image`` named vector
 and the hits are merged before reranking. Image hits are given a text
@@ -41,7 +47,26 @@ class Retriever:
         top_n: int | None = None,
         include_images: bool | None = None,
     ) -> list[SearchResult]:
-        if not query or not query.strip():
+        return await self.retrieve_from_collections(
+            [collection],
+            query,
+            top_k=top_k,
+            top_n=top_n,
+            include_images=include_images,
+        )
+
+    async def retrieve_from_collections(
+        self,
+        collections: list[str],
+        query: str,
+        *,
+        top_k: int | None = None,
+        top_n: int | None = None,
+        include_images: bool | None = None,
+    ) -> list[SearchResult]:
+        """Retrieve across several collections; results are aggregated by
+        match score (vector score → one rerank pass → Top-N)."""
+        if not collections or not query or not query.strip():
             return []
         top_k = top_k or self._config.top_k
         top_n = top_n or self._config.top_n
@@ -52,14 +77,15 @@ class Retriever:
 
         query_vector = (await self._embedding.embed_text([query], input_type="query"))[0]
 
-        text_hits = await self._store.search(collection, "text", query_vector, top_k)
-        results = [self._to_result(hit) for hit in text_hits]
+        results: list[SearchResult] = []
+        for collection in collections:
+            text_hits = await self._store.search(collection, "text", query_vector, top_k)
+            results.extend(self._to_result(hit) for hit in text_hits)
+            if include_images and self._image_embedding is not None:
+                image_hits = await self._store.search(collection, "image", query_vector, top_k)
+                results.extend(self._to_result(hit) for hit in image_hits)
 
-        if include_images and self._image_embedding is not None:
-            image_hits = await self._store.search(collection, "image", query_vector, top_k)
-            results.extend(self._to_result(hit) for hit in image_hits)
-            results = _dedupe_and_sort(results, top_k)
-
+        results = _dedupe_and_sort(results, top_k)
         if not results:
             return []
 
@@ -93,6 +119,7 @@ class Retriever:
                 "page": payload.get("page"),
                 "chunk_index": payload.get("chunk_index"),
                 "type": payload.get("type"),
+                "kb_id": payload.get("kb_id"),
             },
         )
 
