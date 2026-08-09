@@ -1,0 +1,237 @@
+"""RAGEngine — top-level facade over the whole pipeline.
+
+Constructed from a :class:`~core.config.RAGConfig` plus an on-disk data root.
+The engine owns a knowledge base's documents directory, the index manager
+(rebuild/incremental/rollback), the retriever, and the embedding cache, and
+exposes the small API that the AstrBot adapter and CLI/WebUI consume.
+
+Business code never touches Qdrant or the HTTP providers directly.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import shutil
+from pathlib import Path
+
+from .chunking import TextChunker
+from .config import RAGConfig
+from .exceptions import ParserError
+from .indexing import BuildProgress, IndexManager
+from .models import SearchResult
+from .providers import EmbeddingProvider, RerankerProvider
+from .providers.cache import EmbeddingCache
+from .providers.openai_compatible import OpenAICompatibleEmbedding
+from .providers.reranker import SiliconFlowReranker
+from .retrieval import Retriever
+from .storage.base import VectorStore
+from .storage.qdrant_store import QdrantStore
+
+logger = logging.getLogger("rag.engine")
+
+
+class RAGEngine:
+    def __init__(
+        self,
+        config: RAGConfig,
+        data_root: str | Path,
+        *,
+        store: VectorStore | None = None,
+        embedding: EmbeddingProvider | None = None,
+        image_embedding: EmbeddingProvider | None = None,
+        reranker: RerankerProvider | None = None,
+    ) -> None:
+        config.validate()
+        self.config = config
+        self._data_root = Path(data_root)
+        self._data_root.mkdir(parents=True, exist_ok=True)
+
+        self._store = store or QdrantStore(
+            config.qdrant.url, config.qdrant.api_key, config.qdrant.timeout
+        )
+        self._embedding = embedding or OpenAICompatibleEmbedding(
+            config.embedding.api_base,
+            config.embedding.api_key,
+            config.embedding.model,
+            config.embedding.dimension,
+            batch_size=config.embedding.batch_size,
+            concurrency=config.embedding.concurrency,
+            timeout=config.embedding.timeout,
+            extra_params=config.embedding.extra_params,
+        )
+        if config.image.enabled:
+            self._image_embedding = image_embedding or OpenAICompatibleEmbedding(
+                config.image.api_base,
+                config.image.api_key,
+                config.image.model,
+                int(config.image.dimension),
+                batch_size=config.image.batch_size,
+                concurrency=config.image.concurrency,
+                timeout=config.image.timeout,
+                extra_params=config.image.extra_params,
+            )
+        else:
+            self._image_embedding = image_embedding
+        self._reranker = (
+            reranker
+            if reranker is not None
+            else (
+                SiliconFlowReranker(
+                    config.rerank.api_base,
+                    config.rerank.api_key,
+                    config.rerank.model,
+                    concurrency=config.rerank.concurrency,
+                    timeout=config.rerank.timeout,
+                )
+                if config.rerank.enabled
+                else None
+            )
+        )
+
+        self._chunker = TextChunker(
+            config.chunking.separator,
+            config.chunking.chunk_size,
+            config.chunking.chunk_overlap,
+        )
+        self._cache = EmbeddingCache(self._data_root / "cache.db")
+        self._manager = IndexManager(
+            self._store,
+            self._embedding,
+            self._chunker,
+            self._cache,
+            self._data_root,
+            image_embedding=self._image_embedding,
+        )
+        self._retriever = Retriever(
+            self._store,
+            self._embedding,
+            self._reranker,
+            config,
+            image_embedding=self._image_embedding,
+        )
+
+    # -- knowledge base management ----------------------------------------
+
+    def kb_root(self, kb_id: str) -> Path:
+        safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in kb_id)
+        return self._data_root / safe
+
+    def docs_dir(self, kb_id: str) -> Path:
+        return self.kb_root(kb_id) / "documents"
+
+    async def ingest(self, kb_id: str, paths: list[str | Path]) -> dict:
+        """Copy files into the KB document directory, then sync the index.
+
+        Files already inside the KB document directory are not re-copied
+        (copying a file onto itself fails with a lock error on Windows).
+        """
+        docs = self.docs_dir(kb_id)
+        docs.mkdir(parents=True, exist_ok=True)
+        for raw in paths:
+            src = Path(raw)
+            if not src.is_file():
+                raise ParserError(f"文件不存在: {src}")
+            dest = docs / src.name
+            if src.resolve() == dest.resolve():
+                logger.info("[RAG] 文件已在知识库目录，跳过复制: %s", src.name)
+            else:
+                await asyncio.to_thread(shutil.copy2, src, dest)
+                logger.info("[RAG] 已导入文档: %s -> %s", src.name, dest)
+        return await self._manager.ensure_index(kb_id, self.config)
+
+    async def remove_document(self, kb_id: str, filename: str) -> dict:
+        """Delete one document file from the KB and sync the index."""
+        dest = self.docs_dir(kb_id) / filename
+        if not dest.exists():
+            raise ParserError(f"文档不存在: {filename}")
+        await asyncio.to_thread(dest.unlink)
+        return await self._manager.sync(kb_id, self.config)
+
+    async def rebuild(self, kb_id: str) -> dict:
+        """Force a full rebuild (new version, atomic switch on success)."""
+        return await self._manager.rebuild(kb_id, self.config)
+
+    async def sync(self, kb_id: str) -> dict:
+        """Incremental sync of the KB document directory."""
+        return await self._manager.sync(kb_id, self.config)
+
+    async def delete_kb(self, kb_id: str) -> None:
+        await self._manager.delete_kb(kb_id)
+
+    async def list_kbs(self) -> list[str]:
+        if not self._data_root.exists():
+            return []
+        return sorted(p.name for p in self._data_root.iterdir() if p.is_dir())
+
+    async def status(self, kb_id: str) -> dict:
+        return await self._manager.status(kb_id, self.config)
+
+    def get_build_progress(self, kb_id: str) -> BuildProgress | None:
+        return self._manager.get_progress(kb_id)
+
+    # -- retrieval --------------------------------------------------------
+
+    async def search(
+        self,
+        kb_id: str,
+        query: str,
+        *,
+        top_k: int | None = None,
+        top_n: int | None = None,
+        include_images: bool | None = None,
+    ) -> list[SearchResult]:
+        collection = await self._manager.active_collection(kb_id)
+        if collection is None:
+            from .exceptions import IndexNotFoundError
+
+            raise IndexNotFoundError(
+                f"知识库 {kb_id} 尚未构建索引，请先导入文档或执行 /rag rebuild"
+            )
+        return await self._retriever.retrieve(
+            collection,
+            query,
+            top_k=top_k,
+            top_n=top_n,
+            include_images=include_images,
+        )
+
+    # -- context formatting -----------------------------------------------
+
+    @staticmethod
+    def format_context(results: list[SearchResult]) -> str:
+        """Render SearchResults as RAG context (AGENTS.md §45).
+
+        Format is decoupled from Qdrant payloads:
+        ``[Source: <file>, Page: N]\\n\\n<content>``
+        """
+        blocks: list[str] = []
+        for r in results:
+            header = "[Source: "
+            source = r.metadata.get("source") or r.document_id
+            header += str(source)
+            page = r.metadata.get("page")
+            if page is not None:
+                header += f", Page: {page}"
+            header += "]"
+            if r.content:
+                body = r.content
+            elif r.image_path:
+                body = f"[Image: {Path(r.image_path).name}]"
+            else:
+                body = "（无内容）"
+            blocks.append(f"{header}\n\n{body}")
+        return "\n\n".join(blocks)
+
+    # -- lifecycle --------------------------------------------------------
+
+    async def close(self) -> None:
+        for client in (self._embedding, self._image_embedding, self._reranker):
+            close = getattr(client, "close", None)
+            if close is not None:
+                try:
+                    await close()
+                except Exception:  # pragma: no cover - teardown
+                    logger.exception("[RAG] 关闭客户端失败")
+        self._cache.close()
+        await self._store.close()

@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>增强 RAG 知识库</title>
+  <style>
+    :root {
+      --bg: #f7f8fa; --card: #ffffff; --text: #1f2329; --muted: #6b7280;
+      --border: #e5e7eb; --accent: #4f6ef7; --accent-text: #ffffff;
+      --danger: #e5484d; --ok: #30a46c; --warn: #f5a623;
+    }
+    html[data-theme="dark"] {
+      --bg: #14161a; --card: #1e2126; --text: #e6e8ec; --muted: #9aa0a8;
+      --border: #2c3037; --accent: #6b8afd;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; padding: 20px; background: var(--bg); color: var(--text);
+      font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+      font-size: 14px; line-height: 1.6;
+    }
+    h1 { font-size: 18px; margin: 0 0 16px; }
+    .card {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 10px; padding: 16px; margin-bottom: 16px;
+    }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    label { color: var(--muted); font-size: 12px; }
+    input[type=text] {
+      flex: 1; min-width: 200px; padding: 8px 10px; border-radius: 6px;
+      border: 1px solid var(--border); background: var(--card); color: var(--text);
+    }
+    input[type=file] { color: var(--muted); }
+    button {
+      padding: 8px 14px; border-radius: 6px; border: 1px solid var(--border);
+      background: var(--card); color: var(--text); cursor: pointer;
+    }
+    button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    pre, .result-item {
+      background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+      padding: 10px; margin: 8px 0; white-space: pre-wrap; word-break: break-word;
+    }
+    .meta { color: var(--muted); font-size: 12px; }
+    .badge {
+      display: inline-block; padding: 1px 8px; border-radius: 10px;
+      font-size: 12px; background: var(--border); color: var(--muted);
+    }
+    .badge.ok { background: rgba(48,164,108,.15); color: var(--ok); }
+    .badge.warn { background: rgba(245,166,35,.15); color: var(--warn); }
+    .badge.err { background: rgba(229,72,77,.15); color: var(--danger); }
+    .status { margin-top: 8px; min-height: 20px; color: var(--muted); }
+    #progress { display: none; }
+  </style>
+</head>
+<body>
+  <h1>增强 RAG 知识库</h1>
+
+  <div class="card">
+    <div class="row">
+      <label>知识库</label>
+      <input type="text" id="kb" value="default" placeholder="默认: default">
+      <button class="primary" id="btn-status">刷新状态</button>
+      <button id="btn-rebuild">重建索引</button>
+    </div>
+    <div id="status" class="status"></div>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <label>上传文档（txt / md / pdf / 图片，支持多选）</label>
+      <input type="file" id="files" multiple>
+      <button id="btn-upload">导入</button>
+    </div>
+    <div id="upload-status" class="status"></div>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <input type="text" id="query" placeholder="输入问题，检索知识库…">
+      <button class="primary" id="btn-search">检索</button>
+    </div>
+    <div id="search-status" class="status"></div>
+    <div id="results"></div>
+  </div>
+
+  <div class="card" id="progress" style="display:none">
+    <div class="row"><label>重建进度</label><div id="progress-text" class="status"></div></div>
+  </div>
+
+  <script>
+    (function () {
+      // Bridge SDK 由 dashboard 在文档末尾注入，晚于本页内联脚本执行，
+      // 因此必须先轮询等待 window.AstrBotPluginPage 出现（与官方页面一致）。
+      function waitForBridge(timeoutMs) {
+        return new Promise(function (resolve, reject) {
+          const started = Date.now();
+          (function tick() {
+            if (window.AstrBotPluginPage) return resolve(window.AstrBotPluginPage);
+            if (Date.now() - started > (timeoutMs || 15000)) {
+              return reject(new Error("bridge 加载超时，请刷新页面"));
+            }
+            setTimeout(tick, 50);
+          })();
+        });
+      }
+
+      const $ = (id) => document.getElementById(id);
+      const KB = () => encodeURIComponent($("kb").value.trim() || "default");
+      // 前端会先拼上插件名，这里只写路由后缀。
+
+      function setStatus(el, text, ok) {
+        const node = $(el);
+        node.textContent = text;
+        node.style.color = ok === false ? "var(--danger)" : ok === true ? "var(--ok)" : "var(--muted)";
+      }
+
+      function esc(s) {
+        const div = document.createElement("div");
+        div.textContent = s == null ? "" : String(s);
+        return div.innerHTML;
+      }
+
+      function renderStatus(data) {
+        const lines = [`活动版本: ${data.active_version ? "v" + data.active_version : "无"}`];
+        if (data.config_changed) lines.push("⚠ 配置已变更，需要重建索引");
+        for (const [v, m] of Object.entries(data.versions || {})) {
+          const cls = m.status === "READY" ? "ok" : m.status === "FAILED" ? "err" : "warn";
+          lines.push(`v${v} [<span class="badge ${cls}">${esc(m.status)}</span>] 文档 ${m.document_count} · 块 ${m.chunk_count}${m.error ? " · " + esc(m.error) : ""}`);
+        }
+        $("status").innerHTML = lines.map((l) => `<div>${l}</div>`).join("");
+      }
+
+      async function refreshStatus(bridge) {
+        setStatus("status", "加载中…");
+        try {
+          const data = await bridge.apiGet("status", { kb_id: KB() });
+          renderStatus(data);
+          setStatus("status", "", true);
+        } catch (e) {
+          setStatus("status", "状态获取失败: " + e, false);
+        }
+      }
+
+      async function rebuild(bridge) {
+        setStatus("status", "正在触发重建…");
+        try {
+          const data = await bridge.apiPost("rebuild", { kb_id: KB() });
+          setStatus("status", "重建完成: " + JSON.stringify(data));
+          refreshStatus(bridge);
+        } catch (e) {
+          setStatus("status", "重建失败: " + e, false);
+        }
+      }
+
+      async function pollProgress(bridge) {
+        try {
+          const p = await bridge.apiGet("progress", { kb_id: KB() });
+          if (p && p.status && p.status !== "idle") {
+            $("progress").style.display = "block";
+            $("progress-text").textContent =
+              `${p.status} · ${p.processed_documents}/${p.total_documents} 文档 · ${p.processed_chunks} 块` +
+              (p.error ? " · " + p.error : "");
+            setTimeout(() => pollProgress(bridge), 2000);
+          } else {
+            $("progress").style.display = "none";
+          }
+        } catch (e) { /* ignore transient polling errors */ }
+      }
+
+      async function upload(bridge) {
+        const input = $("files");
+        if (!input.files.length) { setStatus("upload-status", "请先选择文件", false); return; }
+        setStatus("upload-status", "上传中…");
+        let ok = 0;
+        try {
+          for (const file of input.files) {
+            await bridge.upload("ingest", file);
+            ok++;
+          }
+          setStatus("upload-status", `已上传 ${ok} 个文件，开始索引…`, true);
+          pollProgress(bridge);
+          refreshStatus(bridge);
+        } catch (e) {
+          setStatus("upload-status", "上传失败: " + e, false);
+        }
+        input.value = "";
+      }
+
+      async function search(bridge) {
+        const q = $("query").value.trim();
+        if (!q) return;
+        setStatus("search-status", "检索中…");
+        $("results").innerHTML = "";
+        try {
+          const data = await bridge.apiGet("search", { kb_id: KB(), q, top_n: 6 });
+          const results = data.results || [];
+          if (!results.length) { setStatus("search-status", "未检索到相关内容。", false); return; }
+          setStatus("search-status", `检索到 ${results.length} 条：`, true);
+          $("results").innerHTML = results.map((r) => {
+            const source = (r.metadata && r.metadata.source) || r.document_id;
+            const page = r.metadata && r.metadata.page;
+            const score = r.rerank_score != null
+              ? `向量 ${r.vector_score.toFixed(4)} / 重排 ${r.rerank_score.toFixed(4)}`
+              : `向量 ${r.vector_score.toFixed(4)}`;
+            const body = r.content || (r.image_path ? `[图片: ${r.image_path}]` : "（无内容）");
+            return `<div class="result-item"><div class="meta">[${esc(source)}${page ? ", Page " + page : ""}] · ${esc(score)}</div><div>${esc(body)}</div></div>`;
+          }).join("");
+        } catch (e) {
+          setStatus("search-status", "检索失败: " + e, false);
+        }
+      }
+
+      async function init() {
+        const bridge = await waitForBridge();
+        const ctx = await bridge.ready();
+        document.documentElement.setAttribute("data-theme", ctx.isDark ? "dark" : "light");
+        $("btn-status").onclick = () => refreshStatus(bridge);
+        $("btn-rebuild").onclick = () => rebuild(bridge);
+        $("btn-upload").onclick = () => upload(bridge);
+        $("btn-search").onclick = () => search(bridge);
+        $("query").addEventListener("keydown", (e) => { if (e.key === "Enter") search(bridge); });
+        refreshStatus(bridge);
+        pollProgress(bridge);
+      }
+      init().catch((e) => {
+        setStatus("status", "页面初始化失败: " + e, false);
+      });
+    })();
+  </script>
+</body>
+</html>
