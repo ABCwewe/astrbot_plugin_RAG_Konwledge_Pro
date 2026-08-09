@@ -47,13 +47,13 @@ async def test_drop_index_keeps_kb_and_documents(tmp_path):
     assert st["active_version"] is None
     assert st["versions"] == {}
     # KB root + documents survive, registry cleared → docs show as unindexed
-    assert (tmp_path / "rag" / "kb" / "documents" / "a.md").exists()
+    assert (tmp_path / "rag" / "kbs" / "kb" / "documents" / "a.md").exists()
     docs_list = await engine.list_documents("kb")
     assert len(docs_list) == 1
     assert docs_list[0]["indexed"] is False
 
     # re-ingest rebuilds the index from the kept documents
-    result = await engine.ingest("kb", [tmp_path / "rag" / "kb" / "documents" / "a.md"])
+    result = await engine.ingest("kb", [tmp_path / "rag" / "kbs" / "kb" / "documents" / "a.md"])
     assert result["action"] == "rebuilt"
     assert (await engine.status("kb"))["active_version"] == 1
     await engine.close()

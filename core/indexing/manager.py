@@ -104,7 +104,9 @@ class IndexManager:
 
     def _kb_root(self, kb_id: str) -> Path:
         safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in kb_id)
-        return self._data_root / safe
+        # 所有知识库统一放在 <data_root>/kbs/ 下，与 tmp/、cache.db 等
+        # 引擎级目录同级隔离。
+        return self._data_root / "kbs" / safe
 
     def _docs_dir(self, kb_id: str) -> Path:
         return self._kb_root(kb_id) / "documents"

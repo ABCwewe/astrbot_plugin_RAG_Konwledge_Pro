@@ -46,6 +46,7 @@ class RAGEngine:
         self.config = config
         self._data_root = Path(data_root)
         self._data_root.mkdir(parents=True, exist_ok=True)
+        self._migrate_legacy_kbs()
 
         self._store = store or QdrantStore(
             config.qdrant.url, config.qdrant.api_key, config.qdrant.timeout
@@ -115,7 +116,30 @@ class RAGEngine:
 
     def kb_root(self, kb_id: str) -> Path:
         safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in kb_id)
-        return self._data_root / safe
+        return self._data_root / "kbs" / safe
+
+    def _migrate_legacy_kbs(self) -> None:
+        """Move KB roots from the old layout (``data_root/<kb_id>``) into the
+        parent folder ``data_root/kbs/`` so engine-level directories (tmp/,
+        cache.db) never mix with knowledge bases."""
+        kbs_dir = self._data_root / "kbs"
+        for child in self._data_root.iterdir():
+            if not child.is_dir() or child.name in ("kbs", "tmp"):
+                continue
+            looks_like_kb = (
+                (child / "documents").is_dir()
+                or (child / "active.json").exists()
+                or any(child.glob("manifest_v*.json"))
+            )
+            if not looks_like_kb:
+                continue
+            dest = kbs_dir / child.name
+            if dest.exists():
+                logger.warning("[RAG] 迁移目标已存在，跳过: %s", dest)
+                continue
+            kbs_dir.mkdir(parents=True, exist_ok=True)
+            child.rename(dest)
+            logger.info("[RAG] 迁移知识库目录: %s -> %s", child, dest)
 
     def docs_dir(self, kb_id: str) -> Path:
         return self.kb_root(kb_id) / "documents"
@@ -187,9 +211,10 @@ class RAGEngine:
         await self._manager.delete_kb(kb_id)
 
     async def list_kbs(self) -> list[str]:
-        if not self._data_root.exists():
+        kbs_dir = self._data_root / "kbs"
+        if not kbs_dir.exists():
             return []
-        return sorted(p.name for p in self._data_root.iterdir() if p.is_dir())
+        return sorted(p.name for p in kbs_dir.iterdir() if p.is_dir())
 
     async def status(self, kb_id: str) -> dict:
         return await self._manager.status(kb_id, self.config)
