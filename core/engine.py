@@ -484,6 +484,60 @@ class RAGEngine:
             collection, data, top_n=top_n
         )
 
+    async def search_image_multi(
+        self,
+        kb_ids: list[str],
+        image_path: str | Path,
+        *,
+        top_n: int | None = None,
+    ) -> list[SearchResult]:
+        """Image-as-query retrieval across several KBs.
+
+        KBs without a READY index or without an ``image`` named vector are
+        skipped; hits are merged by vector score (deduped) up to ``top_n``.
+        """
+        from .exceptions import ConfigurationError, IndexNotFoundError
+
+        if not self.config.image.enabled or self._image_embedding is None:
+            raise ConfigurationError("图片检索未启用（image.enabled=false）")
+        kb_ids = [kb for kb in kb_ids if kb and kb.strip()]
+        if not kb_ids:
+            return []
+        data = await asyncio.to_thread(Path(image_path).read_bytes)
+        limit = top_n or self.config.top_n
+        results: list[SearchResult] = []
+        usable = 0
+        for kb_id in kb_ids:
+            collection = await self._manager.active_collection(kb_id)
+            if collection is None:
+                continue
+            if not await self._store.collection_has_vector(collection, "image"):
+                logger.debug("[RAG] 知识库无图片向量，跳过: %s", kb_id)
+                continue
+            if await self._store.count(
+                collection, count_filter={"type": "image"}
+            ) == 0:
+                logger.debug("[RAG] 知识库无图片数据，跳过: %s", kb_id)
+                continue
+            usable += 1
+            results.extend(
+                await self._retriever.retrieve_by_image(
+                    collection, data, top_n=limit
+                )
+            )
+        if not usable:
+            raise IndexNotFoundError("所选知识库均无可用的图片索引")
+        seen: set[str] = set()
+        merged: list[SearchResult] = []
+        for result in sorted(results, key=lambda r: r.vector_score, reverse=True):
+            if result.chunk_id in seen:
+                continue
+            seen.add(result.chunk_id)
+            merged.append(result)
+            if len(merged) >= limit:
+                break
+        return merged
+
     # -- knowledge base management ----------------------------------------
 
     async def create_kb(self, kb_id: str) -> dict:

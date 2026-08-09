@@ -704,7 +704,7 @@
 
       // ---------- 多知识库检索 ----------
       function applyDefaultsToSearch() {
-        if (searchKbs.size) return;
+        // 每次进入检索页都与聚合集合重新同步；页内勾选仅本次临时生效
         searchKbs = new Set(defaultsKbs);
         renderSearchChecks();
       }
@@ -764,6 +764,7 @@
           html += `<fieldset><legend>${esc(GROUP_TITLES[group] || group)}</legend>`;
           for (const key of (groupMembers[group] || [])) {
             const meta = schema[key] || {};
+            if (meta.invisible) continue;  // 由知识库管理页维护的隐藏项
             const type = meta.type || "string";
             const value = configValues[key];
             const desc = meta.description ? `<div class="cfg-desc">${esc(meta.description)}</div>` : "";
@@ -806,6 +807,7 @@
       async function saveConfig() {
         const patch = {};
         for (const key of Object.keys(schema)) {
+          if ((schema[key] || {}).invisible) continue;
           const input = document.getElementById("cfg_" + key);
           if (!input) continue;
           const type = (schema[key] || {}).type || "string";

@@ -43,6 +43,10 @@ class VectorStore(ABC):
         ...
 
     @abstractmethod
+    async def collection_has_vector(self, name: str, vector_name: str) -> bool:
+        """Whether the collection defines a named vector (e.g. ``image``)."""
+
+    @abstractmethod
     async def delete_collection(self, name: str) -> None:
         ...
 
@@ -80,8 +84,11 @@ class VectorStore(ABC):
         """
 
     @abstractmethod
-    async def count(self, collection: str) -> int:
-        ...
+    async def count(
+        self, collection: str, *, count_filter: dict | None = None
+    ) -> int:
+        """Count points; ``count_filter`` is a simple {payload_key: value}
+        equality condition (e.g. ``{"type": "image"}``)."""
 
     @abstractmethod
     def scroll(self, collection: str) -> AsyncIterator[ScoredPoint]:

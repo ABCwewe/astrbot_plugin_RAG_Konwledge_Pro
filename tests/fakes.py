@@ -23,6 +23,10 @@ class FakeVectorStore(VectorStore):
     async def collection_exists(self, name) -> bool:
         return name in self.collections
 
+    async def collection_has_vector(self, name, vector_name) -> bool:
+        coll = self.collections.get(name)
+        return bool(coll and vector_name in coll.get("vectors", {}))
+
     async def delete_collection(self, name) -> None:
         self.collections.pop(name, None)
         self.deleted_collections.append(name)
@@ -68,9 +72,17 @@ class FakeVectorStore(VectorStore):
         scored.sort(key=lambda s: s.score, reverse=True)
         return scored[:limit]
 
-    async def count(self, collection) -> int:
+    async def count(self, collection, *, count_filter=None) -> int:
         coll = self.collections.get(collection)
-        return len(coll["points"]) if coll else 0
+        if not coll:
+            return 0
+        if not count_filter:
+            return len(coll["points"])
+        return sum(
+            1
+            for p in coll["points"].values()
+            if all(p.payload.get(k) == v for k, v in count_filter.items())
+        )
 
     async def scroll(self, collection):
         coll = self.collections.get(collection)

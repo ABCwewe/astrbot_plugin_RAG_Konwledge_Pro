@@ -2,8 +2,15 @@
   "default_kb_id": {
     "type": "string",
     "default": "default",
-    "description": "默认知识库 ID（rag_search 工具与自动图片检索的目标）。留空则禁用默认知识库：不会自动创建，工具静默跳过，需在 WebUI/命令中显式指定知识库",
+    "description": "兜底知识库 ID（默认聚合检索集合为空时，rag_search 工具与自动图片检索使用它；留空则禁用兜底）",
     "group": "general"
+  },
+  "default_kb_ids": {
+    "type": "list",
+    "default": [],
+    "description": "默认聚合检索知识库集合（rag_search 工具与自动图片检索的目标；在知识库管理页勾选维护，新建自动加入、删除自动移除）",
+    "group": "general",
+    "invisible": true
   },
   "qdrant_url": {
     "type": "string",

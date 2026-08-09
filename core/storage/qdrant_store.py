@@ -62,6 +62,16 @@ class QdrantStore(VectorStore):
         except Exception as exc:
             raise QdrantError(f"检查 collection {name} 失败: {exc}") from exc
 
+    async def collection_has_vector(self, name: str, vector_name: str) -> bool:
+        try:
+            info = await self._client.get_collection(collection_name=name)
+        except Exception as exc:
+            raise QdrantError(f"获取 collection {name} 配置失败: {exc}") from exc
+        vectors = getattr(getattr(info.config, "params", None), "vectors", None)
+        if isinstance(vectors, dict):
+            return vector_name in vectors
+        return False
+
     async def delete_collection(self, name: str) -> None:
         try:
             await self._client.delete_collection(collection_name=name)
@@ -145,9 +155,23 @@ class QdrantStore(VectorStore):
             for p in resp.points
         ]
 
-    async def count(self, collection: str) -> int:
+    async def count(
+        self, collection: str, *, count_filter: dict | None = None
+    ) -> int:
+        qdrant_filter = None
+        if count_filter:
+            qdrant_filter = Filter(
+                must=[
+                    FieldCondition(key=key, match=MatchValue(value=value))
+                    for key, value in count_filter.items()
+                ]
+            )
         try:
-            resp = await self._client.count(collection_name=collection, exact=True)
+            resp = await self._client.count(
+                collection_name=collection,
+                count_filter=qdrant_filter,
+                exact=True,
+            )
             return resp.count
         except Exception as exc:
             raise QdrantError(f"统计 {collection} 点数失败: {exc}") from exc

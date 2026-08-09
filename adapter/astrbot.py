@@ -30,9 +30,8 @@ from .config_utils import (
     apply_patch,
     group_members,
     group_order,
-    load_search_defaults,
     mask_config,
-    save_search_defaults,
+    normalize_kb_ids,
 )
 from .image_utils import find_message_image
 
@@ -334,12 +333,19 @@ class AstrBotRAGAdapter:
         return "\n".join(lines)
 
     async def llm_search(self, query: str) -> str | None:
-        """LLM tool entry point: returns RAG context or None (no noise)."""
-        if not self.default_kb:
-            # default_kb_id 留空 = 禁用默认知识库：工具静默跳过
+        """LLM tool entry point: returns RAG context or None (no noise).
+
+        目标库 = 默认聚合检索集合（非空时跨库检索），否则退回 default_kb。
+        """
+        defaults = self.get_default_search_kbs()
+        target = defaults or ([self.default_kb] if self.default_kb else [])
+        if not target:
             return None
         try:
-            results = await self.search(self.default_kb, query)
+            if defaults:
+                results = await self.search_multi(defaults, query)
+            else:
+                results = await self.search(self.default_kb, query)
         except RAGError as exc:
             logger.warning("[RAG][LLM] 检索失败: %s", exc)
             return None
@@ -351,6 +357,8 @@ class AstrBotRAGAdapter:
         """消息带图时自动图片向量检索，返回注入用上下文。
 
         - 仅当 image.enabled 且 image.auto_search 时生效
+        - 目标库 = 默认聚合检索集合（跨库检索、跳过无图片向量的库），
+          集合为空时退回 default_kb
         - 只读取事件中的图片（正文优先，其次引用消息），不修改事件
         - 无图 / 检索无结果 / 任何失败都返回 None（静默跳过，绝不干扰
           AstrBot 原生的图像转述与直通流程）
@@ -359,10 +367,11 @@ class AstrBotRAGAdapter:
             engine = self._require_engine()
             if not engine.config.image.enabled or not engine.config.image.auto_search:
                 return None
-            if not self.default_kb:
-                # default_kb_id 留空 = 禁用默认知识库：自动图片检索静默跳过
-                return None
         except RuntimeError:
+            return None
+        defaults = self.get_default_search_kbs()
+        targets = defaults or ([self.default_kb] if self.default_kb else [])
+        if not targets:
             return None
         get_messages = getattr(event, "get_messages", None)
         messages = get_messages() if get_messages else []
@@ -376,9 +385,14 @@ class AstrBotRAGAdapter:
             )
             if not image_path:
                 return None
-            results = await engine.search_image_by_path(
-                self.default_kb, image_path, top_n=3
-            )
+            if defaults:
+                results = await engine.search_image_multi(
+                    defaults, image_path, top_n=3
+                )
+            else:
+                results = await engine.search_image_by_path(
+                    self.default_kb, image_path, top_n=3
+                )
         except Exception as exc:
             logger.debug("[RAG] 自动图片检索跳过: %s", exc)
             return None
@@ -447,6 +461,7 @@ class AstrBotRAGAdapter:
 
     async def delete_kb(self, kb_id: str) -> None:
         await self._require_engine().delete_kb(kb_id)
+        self._remove_default_search_kb(kb_id)
 
     async def drop_index(self, kb_id: str) -> None:
         """Delete only the KB index; documents and the KB itself are kept."""
@@ -457,7 +472,10 @@ class AstrBotRAGAdapter:
             from ..core.exceptions import ConfigurationError
 
             raise ConfigurationError("知识库 ID 不能为空")
-        return await self._require_engine().create_kb(kb_id.strip())
+        result = await self._require_engine().create_kb(kb_id.strip())
+        # 新建知识库自动进入默认聚合检索集合（工具检索/自动图片检索即覆盖）
+        self._add_default_search_kb(kb_id.strip())
+        return result
 
     async def receive_upload(self, kb_id: str, filename: str, saver) -> str:
         """原子接收上传文件到收件箱（不索引，由后台工人波次处理）。"""
@@ -469,20 +487,32 @@ class AstrBotRAGAdapter:
 
     # -- 默认聚合检索知识库 ------------------------------------------------
 
-    def _require_data_dir(self) -> Path:
-        if self._data_dir is None:
-            raise RuntimeError("RAG 引擎未初始化：请先在配置页完成 Embedding/Rerank 配置")
-        return self._data_dir
-
-    def _defaults_path(self) -> Path:
-        return self._require_data_dir() / "search_defaults.json"
-
     def get_default_search_kbs(self) -> list[str]:
-        """Persisted KB ids enabled by default for aggregated search."""
-        return load_search_defaults(self._defaults_path())
+        """聚合检索集合（rag_search 工具与自动图片检索的目标）。
+
+        存于插件配置 ``default_kb_ids``；由知识库管理页勾选维护，
+        新建自动加入、删除自动移除。
+        """
+        ids = self._cfg.get("default_kb_ids", [])
+        return [kb for kb in ids if isinstance(kb, str) and kb.strip()]
 
     def set_default_search_kbs(self, kb_ids: list[str]) -> list[str]:
-        return save_search_defaults(self._defaults_path(), kb_ids)
+        ids = normalize_kb_ids(kb_ids)
+        self._cfg["default_kb_ids"] = ids
+        saver = getattr(self._cfg, "save_config", None)
+        if callable(saver):
+            saver(dict(self._cfg))
+        return ids
+
+    def _add_default_search_kb(self, kb_id: str) -> None:
+        ids = self.get_default_search_kbs()
+        if kb_id and kb_id not in ids:
+            self.set_default_search_kbs([*ids, kb_id])
+
+    def _remove_default_search_kb(self, kb_id: str) -> None:
+        ids = self.get_default_search_kbs()
+        if kb_id in ids:
+            self.set_default_search_kbs([kb for kb in ids if kb != kb_id])
 
     async def list_documents(self, kb_id: str) -> list[dict]:
         return await self._require_engine().list_documents(kb_id)

@@ -223,6 +223,41 @@ async def test_engine_search_image_by_path_disabled_raises(tmp_path):
     await engine.close()
 
 
+async def test_search_image_multi_skips_image_less_kbs(tmp_path):
+    from core.exceptions import IndexNotFoundError
+
+    engine = RAGEngine(
+        _image_config(),
+        tmp_path / "rag",
+        store=FakeVectorStore(),
+        embedding=HashEmbedding(dim=32),
+        image_embedding=HashEmbedding(dim=32, supports_image=True),
+        reranker=None,
+    )
+    # kb1 有图；kb2 只有文本（无 image 向量）
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "角色A.png").write_bytes(_png_bytes("角色A"))
+    (docs / "kb2.txt").write_text("纯文本知识库", encoding="utf-8")
+    await engine.ingest("kb1", [docs / "角色A.png"])
+    await engine.ingest("kb2", [docs / "kb2.txt"])
+
+    probe = tmp_path / "probe.png"
+    probe.write_bytes(_png_bytes("角色A"))
+    results = await engine.search_image_multi(["kb1", "kb2"], probe)
+    # kb2 无图片向量被跳过，结果全部来自 kb1
+    assert results
+    assert all(r.metadata.get("kb_id") == "kb1" for r in results)
+
+    # 全部无图 → IndexNotFoundError
+    try:
+        await engine.search_image_multi(["kb2"], probe)
+        assert False, "expected IndexNotFoundError"
+    except IndexNotFoundError:
+        pass
+    await engine.close()
+
+
 # ---------- adapter context builder ----------
 
 
