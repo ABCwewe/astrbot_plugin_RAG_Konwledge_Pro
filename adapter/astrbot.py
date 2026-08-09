@@ -332,15 +332,22 @@ class AstrBotRAGAdapter:
             )
         return "\n".join(lines)
 
-    async def llm_search(self, query: str) -> str | None:
-        """LLM tool entry point: returns RAG context or None (no noise).
+    async def llm_search(self, query: str) -> str:
+        """LLM tool entry point: 总是返回明确的检索状态。
 
-        目标库 = 默认聚合检索集合（非空时跨库检索），否则退回 default_kb。
+        返回字符串会被加入下一次 LLM 请求的 prompt；不返回 None——
+        否则 LLM 会误以为工具已在消息中完成检索而结束调用或凭空作答。
+        - 命中：上下文（带来源标注）
+        - 未命中：明确提示知识库无相关内容
+        - 失败/未配置：error 前缀的错误说明
         """
         defaults = self.get_default_search_kbs()
         target = defaults or ([self.default_kb] if self.default_kb else [])
         if not target:
-            return None
+            return (
+                "error: 未配置任何知识库，无法检索。"
+                "请先创建知识库并在知识库管理页勾选默认聚合检索库。"
+            )
         try:
             if defaults:
                 results = await self.search_multi(defaults, query)
@@ -348,10 +355,19 @@ class AstrBotRAGAdapter:
                 results = await self.search(self.default_kb, query)
         except RAGError as exc:
             logger.warning("[RAG][LLM] 检索失败: %s", exc)
-            return None
+            return (
+                f"error: 知识库检索失败：{exc}。"
+                "请告知用户知识库检索暂不可用，不要编造来源。"
+            )
         if not results:
-            return None
-        return RAGEngine.format_context(results)
+            return (
+                f"知识库中未检索到与「{query}」相关的内容。"
+                "请如实告知用户知识库暂无相关信息，并仅基于你自己的知识回答，不要编造来源。"
+            )
+        return (
+            f"知识库检索到 {len(results)} 条相关内容：\n\n"
+            f"{RAGEngine.format_context(results)}"
+        )
 
     async def auto_image_search_context(self, event) -> str | None:
         """消息带图时自动图片向量检索，返回注入用上下文。

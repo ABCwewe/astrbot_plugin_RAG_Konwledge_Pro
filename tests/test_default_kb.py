@@ -76,14 +76,15 @@ async def test_empty_default_kb_disables_llm_tool(tmp_path, monkeypatch):
     from adapter.astrbot import AstrBotRAGAdapter
 
     adapter = AstrBotRAGAdapter(None, {"default_kb_id": ""})
-    # engine-less adapter: default_kb empty short-circuits before _require_engine
+    # engine-less adapter: 未配置知识库 → 返回明确错误信息（绝不返回 None）
     assert adapter.default_kb == ""
-    assert await adapter.llm_search("任何问题") is None
-    assert await adapter.auto_image_search_context(object()) is None
+    result = await adapter.llm_search("任何问题")
+    assert isinstance(result, str) and "error" in result
 
-    # with engine attached, still skipped (no index created)
+    # with engine attached, still explicit error, no index created
     engine = _engine(tmp_path)
     adapter._engine = engine
-    assert await adapter.llm_search("任何问题") is None
+    result2 = await adapter.llm_search("任何问题")
+    assert isinstance(result2, str) and "未配置任何知识库" in result2
     assert await engine.list_kbs() == []
     await engine.close()

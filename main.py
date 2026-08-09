@@ -140,7 +140,7 @@ class RAGPlugin(Star):
 
     @filter.llm_tool(name="rag_search")
     async def rag_search_tool(self, event: AstrMessageEvent, query: str):
-        """在增强 RAG 知识库中检索与问题最相关的内容片段，返回带来源标注的上下文。
+        """在增强 RAG 知识库中检索与问题最相关的内容片段。总是返回检索状态：命中内容、未命中提示或错误信息，不会返回空。
 
         Args:
             query(string): 需要检索的问题或关键词。
@@ -149,7 +149,10 @@ class RAGPlugin(Star):
             return await self.adapter.llm_search(query)
         except Exception as exc:
             logger.exception("[RAG][LLM] 检索失败")
-            return None
+            return (
+                f"error: 知识库检索异常：{exc}。"
+                "请告知用户检索暂不可用，不要编造来源。"
+            )
 
     # ------------------------------------------------------------------
     # Web API（供 WebUI 页面调用）

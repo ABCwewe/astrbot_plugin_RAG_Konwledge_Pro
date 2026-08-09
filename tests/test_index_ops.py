@@ -89,6 +89,47 @@ def test_coerce_list_type():
     assert coerce_value("default_kb_ids", ("a",), schema) == ["a"]
 
 
+async def test_llm_search_returns_explicit_status(tmp_path, monkeypatch):
+    """工具必须总是返回明确状态：未命中提示 / error 前缀，绝不返回 None。"""
+    import os
+
+    monkeypatch.setattr(os, "getcwd", lambda: str(tmp_path))
+    from adapter.astrbot import AstrBotRAGAdapter
+
+    engine = RAGEngine(
+        _config(),
+        tmp_path / "rag",
+        store=FakeVectorStore(),
+        embedding=FakeEmbedding(dim=8),
+        image_embedding=None,
+        reranker=None,
+    )
+    # 空库（有索引但无内容）→ 未命中提示
+    await engine.create_kb("kb1")
+    adapter = AstrBotRAGAdapter(None, {"default_kb_id": "kb1"})
+    adapter._engine = engine
+    result = await adapter.llm_search("任何问题")
+    assert result is not None
+    assert "未检索到" in result
+    assert "不要编造" in result
+
+    # 引擎报错（RAGError）→ error 前缀，绝不返回 None
+    from core.exceptions import RAGError
+
+    class _QdrantFail(RAGError):
+        pass
+
+    async def boom(*args, **kwargs):
+        raise _QdrantFail("检索 kb1 失败")
+
+    engine.search = boom  # type: ignore[method-assign]
+    result2 = await adapter.llm_search("任何问题")
+    assert result2 is not None
+    assert result2.startswith("error:")
+    assert "检索失败" in result2
+    await engine.close()
+
+
 async def test_adapter_defaults_config_backed(tmp_path, monkeypatch):
     import os
 
