@@ -4,12 +4,14 @@ Bridges the AstrBot plugin layer (config, events, messages, WebUI) to the
 self-contained :class:`~core.engine.RAGEngine`. All AstrBot-specific API
 usage is confined here; the engine never sees AstrBot objects.
 
-The plugin's persistent data lives under ``data/plugin_data/astrbot_rag``
-(AGENTS.md §35 persistence rule), not inside the plugin directory.
+The plugin's persistent data lives under
+``data/plugin_data/astrbot_plugin_RAG_Konwledge_Pro`` (AGENTS.md §35
+persistence rule), never inside the plugin directory.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 
@@ -19,15 +21,19 @@ from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 
 try:  # loaded as part of the plugin package inside AstrBot
     from ..core import RAGConfig, RAGEngine
-    from ..core.exceptions import RAGError
+    from ..core.exceptions import ConfigurationError, RAGError
 except ImportError:  # standalone (tests / scripts)
     from core import RAGConfig, RAGEngine
-    from core.exceptions import RAGError
+    from core.exceptions import ConfigurationError, RAGError
+
+from .config_utils import apply_patch, group_members, group_order, mask_config
 
 logger = logging.getLogger("rag.adapter")
 
 #: 插件在 data/plugin_data/ 下的独立目录名（与 metadata.yaml name 一致）。
 PLUGIN_NAME = "astrbot_plugin_RAG_Konwledge_Pro"
+
+_SCHEMA_FILE = Path(__file__).resolve().parent.parent / "_conf_schema.json"
 
 
 def _bridge_rag_logs() -> None:
@@ -63,6 +69,8 @@ class AstrBotRAGAdapter:
         self.context = context
         self._cfg = config or {}
         self._engine: RAGEngine | None = None
+        self._data_dir: Path | None = None
+        self._tmp_dir: Path | None = None
         self.default_kb = str(self._cfg.get("default_kb_id", "default"))
 
     # -- lifecycle --------------------------------------------------------
@@ -70,36 +78,51 @@ class AstrBotRAGAdapter:
     async def initialize(self) -> None:
         _bridge_rag_logs()
         try:
-            rag_config = self._build_rag_config()
-            rag_config.validate()
+            await self._restart_engine()
         except RAGError as exc:
             logger.warning("[RAG] 配置未完成，引擎暂不启动: %s", exc)
-            astrbot_logger.warning("[RAG] 配置未完成，请在插件设置中填写 Embedding/Rerank 配置后重启: %s", exc)
-            return
-        # 所有运行时文件（索引、缓存、临时文件）统一放在
-        # data/plugin_data/astrbot_plugin_RAG_Konwledge_Pro/ 下，
-        # 与插件本体目录完全隔离（AGENTS.md §35）。
-        try:
-            data_dir = StarTools.get_data_dir(PLUGIN_NAME)
-        except Exception as exc:  # pragma: no cover - defensive fallback
-            logger.warning("[RAG] StarTools.get_data_dir 失败，回退到 plugin_data 根: %s", exc)
-            data_dir = Path(get_astrbot_plugin_data_path()) / PLUGIN_NAME
-            data_dir.mkdir(parents=True, exist_ok=True)
-        self._data_dir = data_dir
-        self._tmp_dir = data_dir / "tmp"
-        self._tmp_dir.mkdir(parents=True, exist_ok=True)
-        self._engine = RAGEngine(rag_config, data_dir)
-        astrbot_logger.info(
-            "[RAG] 引擎已初始化 (kb=%s, qdrant=%s, data=%s)",
-            self.default_kb,
-            rag_config.qdrant.url,
-            data_dir,
-        )
+            astrbot_logger.warning(
+                "[RAG] 配置未完成，请在插件设置或 WebUI 中填写 Embedding/Rerank 配置后重试: %s",
+                exc,
+            )
 
     async def terminate(self) -> None:
         if self._engine is not None:
             await self._engine.close()
             self._engine = None
+
+    async def _restart_engine(self) -> None:
+        """(Re)build the engine from the current config. Safe to call when
+        config changes at runtime (WebUI) — closes the old engine first."""
+        rag_config = self._build_rag_config()
+        rag_config.validate()
+        if self._data_dir is None:
+            # 所有运行时文件（索引、缓存、临时文件）统一放在
+            # data/plugin_data/astrbot_plugin_RAG_Konwledge_Pro/ 下，
+            # 与插件本体目录完全隔离（AGENTS.md §35）。
+            try:
+                data_dir = StarTools.get_data_dir(PLUGIN_NAME)
+            except Exception as exc:  # pragma: no cover - defensive fallback
+                logger.warning(
+                    "[RAG] StarTools.get_data_dir 失败，回退到 plugin_data 根: %s", exc
+                )
+                data_dir = Path(get_astrbot_plugin_data_path()) / PLUGIN_NAME
+                data_dir.mkdir(parents=True, exist_ok=True)
+            self._data_dir = data_dir
+            self._tmp_dir = data_dir / "tmp"
+            self._tmp_dir.mkdir(parents=True, exist_ok=True)
+        old_engine = self._engine
+        new_engine = RAGEngine(rag_config, self._data_dir)
+        if old_engine is not None:
+            await old_engine.close()
+        self._engine = new_engine
+        self.default_kb = str(self._cfg.get("default_kb_id", "default"))
+        astrbot_logger.info(
+            "[RAG] 引擎已就绪 (kb=%s, qdrant=%s, data=%s)",
+            self.default_kb,
+            rag_config.qdrant.url,
+            self._data_dir,
+        )
 
     def _require_engine(self) -> RAGEngine:
         if self._engine is None:
@@ -277,3 +300,64 @@ class AstrBotRAGAdapter:
     async def get_build_progress_dict(self, kb_id: str) -> dict | None:
         progress = self._require_engine().get_build_progress(kb_id)
         return progress.to_dict() if progress else None
+
+    # -- config management (WebUI) ----------------------------------------
+
+    def _load_schema(self) -> dict:
+        try:
+            schema = json.loads(_SCHEMA_FILE.read_text(encoding="utf-8-sig"))
+            return schema if isinstance(schema, dict) else {}
+        except (OSError, json.JSONDecodeError):
+            logger.exception("[RAG] 读取 _conf_schema.json 失败")
+            return {}
+
+    async def get_config_payload(self) -> dict:
+        """Schema + current values (secrets masked) for the WebUI form."""
+        schema = self._load_schema()
+        return {
+            "schema": schema,
+            "config": mask_config(dict(self._cfg)),
+            "groups": group_order(schema),
+            "group_members": group_members(schema),
+            "default_kb": self.default_kb,
+        }
+
+    async def update_config(self, patch: dict) -> dict:
+        """Apply a validated patch from the WebUI, persist it, restart engine.
+
+        Raises:
+            ConfigurationError: when the merged config fails validation
+                (nothing is persisted in that case).
+        """
+        schema = self._load_schema()
+        if not isinstance(patch, dict):
+            raise ConfigurationError("配置数据格式错误")
+        merged = apply_patch(self._cfg, patch, schema)
+
+        # Validate BEFORE persisting: build a config from the merged values.
+        old_cfg = self._cfg
+        self._cfg = merged
+        try:
+            rag_config = self._build_rag_config()
+            rag_config.validate()
+        except Exception:
+            self._cfg = old_cfg  # roll back in-memory state
+            raise
+        await self._restart_engine()
+        # Persist last: if persistence fails the engine still runs on the new
+        # in-memory config; log and surface the error to the caller.
+        saver = getattr(old_cfg, "save_config", None) if isinstance(old_cfg, dict) else None
+        if saver is not None:
+            saver(merged)
+        return await self.get_config_payload()
+
+    # -- knowledge base management (WebUI) --------------------------------
+
+    async def delete_kb(self, kb_id: str) -> None:
+        await self._require_engine().delete_kb(kb_id)
+
+    async def list_documents(self, kb_id: str) -> list[dict]:
+        return await self._require_engine().list_documents(kb_id)
+
+    async def delete_document(self, kb_id: str, filename: str) -> dict:
+        return await self._require_engine().remove_document(kb_id, filename)

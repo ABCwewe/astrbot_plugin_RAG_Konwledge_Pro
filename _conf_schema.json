@@ -2,126 +2,151 @@
   "default_kb_id": {
     "type": "string",
     "default": "default",
-    "description": "默认知识库 ID"
+    "description": "默认知识库 ID",
+    "group": "general"
   },
   "qdrant_url": {
     "type": "string",
     "default": "http://127.0.0.1:6333",
-    "description": "Qdrant 服务地址"
+    "description": "Qdrant 服务地址",
+    "group": "qdrant"
   },
   "qdrant_api_key": {
     "type": "string",
     "default": "",
-    "description": "Qdrant API Key（本地开发可留空）"
+    "description": "Qdrant API Key（本地开发可留空）",
+    "group": "qdrant"
   },
   "embedding_api_base": {
     "type": "string",
     "default": "https://integrate.api.nvidia.com/v1",
-    "description": "Embedding API Base URL（OpenAI 兼容）"
+    "description": "Embedding API Base URL（OpenAI 兼容）",
+    "group": "embedding"
   },
   "embedding_api_key": {
     "type": "string",
     "default": "",
-    "description": "Embedding API Key"
+    "description": "Embedding API Key",
+    "group": "embedding"
   },
   "embedding_model": {
     "type": "string",
     "default": "nvidia/llama-nemotron-embed-vl-1b-v2",
-    "description": "Embedding 模型名称"
+    "description": "Embedding 模型名称",
+    "group": "embedding"
   },
   "embedding_dimension": {
     "type": "int",
     "default": 2048,
-    "description": "Embedding 向量维度"
+    "description": "Embedding 向量维度",
+    "group": "embedding"
   },
   "embedding_batch_size": {
     "type": "int",
     "default": 32,
-    "description": "Embedding 批量大小"
+    "description": "Embedding 批量大小",
+    "group": "embedding"
   },
   "embedding_concurrency": {
     "type": "int",
     "default": 4,
-    "description": "Embedding 并发数"
+    "description": "Embedding 并发数",
+    "group": "embedding"
   },
   "embedding_input_type": {
     "type": "string",
     "default": "passage",
-    "description": "索引时的 input_type（NVIDIA 非对称模型要求）"
+    "description": "索引时的 input_type（NVIDIA 非对称模型要求）",
+    "group": "embedding"
   },
   "rerank_enabled": {
     "type": "bool",
     "default": true,
-    "description": "是否启用 Reranker"
+    "description": "是否启用 Reranker",
+    "group": "rerank"
   },
   "rerank_api_base": {
     "type": "string",
     "default": "https://api.siliconflow.cn/v1",
-    "description": "Rerank API Base URL"
+    "description": "Rerank API Base URL",
+    "group": "rerank"
   },
   "rerank_api_key": {
     "type": "string",
     "default": "",
-    "description": "Rerank API Key"
+    "description": "Rerank API Key",
+    "group": "rerank"
   },
   "rerank_model": {
     "type": "string",
     "default": "BAAI/bge-reranker-v2-m3",
-    "description": "Rerank 模型名称"
+    "description": "Rerank 模型名称",
+    "group": "rerank"
   },
   "top_k": {
     "type": "int",
     "default": 30,
-    "description": "向量检索候选数 Top-K"
+    "description": "向量检索候选数 Top-K",
+    "group": "retrieval"
   },
   "top_n": {
     "type": "int",
     "default": 6,
-    "description": "最终返回数 Top-N"
+    "description": "最终返回数 Top-N",
+    "group": "retrieval"
   },
   "chunk_separator": {
     "type": "string",
     "default": "\n\n",
-    "description": "文本分块分隔符"
+    "description": "文本分块分隔符",
+    "group": "chunking"
   },
   "chunk_size": {
     "type": "int",
     "default": 800,
-    "description": "分块最大字符数"
+    "description": "分块最大字符数",
+    "group": "chunking"
   },
   "chunk_overlap": {
     "type": "int",
     "default": 100,
-    "description": "分块重叠字符数"
+    "description": "分块重叠字符数",
+    "group": "chunking"
   },
   "image_enabled": {
     "type": "bool",
     "default": false,
-    "description": "是否启用图片向量检索"
+    "description": "是否启用图片向量检索",
+    "group": "image"
   },
   "image_api_base": {
     "type": "string",
     "default": "https://integrate.api.nvidia.com/v1",
-    "description": "图片 Embedding API Base URL（留空则复用文本配置）"
+    "description": "图片 Embedding API Base URL（留空则复用文本配置）",
+    "group": "image"
   },
   "image_api_key": {
     "type": "string",
     "default": "",
-    "description": "图片 Embedding API Key（留空则复用文本配置）"
+    "description": "图片 Embedding API Key（留空则复用文本配置）",
+    "group": "image"
   },
   "image_model": {
     "type": "string",
     "default": "nvidia/llama-nemotron-embed-vl-1b-v2",
-    "description": "图片 Embedding 模型（需支持图片输入）"
+    "description": "图片 Embedding 模型（需支持图片输入）",
+    "group": "image"
   },
   "image_dimension": {
     "type": "int",
     "default": 2048,
-    "description": "图片向量维度"
+    "description": "图片向量维度",
+    "group": "image"
   },
   "image_search_always": {
     "type": "bool",
     "default": false,
-    "description": "普通文本查询是否总是同时检索图片向量"
+    "description": "普通文本查询是否总是同时检索图片向量",
+    "group": "image"
   }
 }

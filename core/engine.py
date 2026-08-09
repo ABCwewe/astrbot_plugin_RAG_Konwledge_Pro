@@ -148,6 +148,33 @@ class RAGEngine:
         await asyncio.to_thread(dest.unlink)
         return await self._manager.sync(kb_id, self.config)
 
+    async def list_documents(self, kb_id: str) -> list[dict]:
+        """List documents of a knowledge base, joined with index metadata."""
+        from .indexing.manifest import ManifestStore, document_id_for
+
+        docs_dir = self.docs_dir(kb_id)
+        if not docs_dir.exists():
+            return []
+        store = ManifestStore(self.kb_root(kb_id))
+        records = await store.load_documents()
+        out: list[dict] = []
+        for path in sorted(docs_dir.rglob("*")):
+            if not path.is_file() or path.name.startswith("."):
+                continue
+            source = path.relative_to(docs_dir).as_posix()
+            record = records.get(document_id_for(kb_id, source))
+            out.append(
+                {
+                    "filename": path.name,
+                    "source": source,
+                    "size": path.stat().st_size,
+                    "indexed": record is not None,
+                    "chunks": (record.metadata.get("chunks", 0) if record else 0),
+                    "indexed_at": record.indexed_at if record else None,
+                }
+            )
+        return out
+
     async def rebuild(self, kb_id: str) -> dict:
         """Force a full rebuild (new version, atomic switch on success)."""
         return await self._manager.rebuild(kb_id, self.config)

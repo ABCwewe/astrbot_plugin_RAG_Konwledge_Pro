@@ -43,6 +43,11 @@ class RAGPlugin(Star):
         ctx.register_web_api(f"/{ROUTE_PREFIX}/ingest", self.web_ingest, ["POST"], "RAG 导入文档")
         ctx.register_web_api(f"/{ROUTE_PREFIX}/rebuild", self.web_rebuild, ["POST"], "RAG 重建索引")
         ctx.register_web_api(f"/{ROUTE_PREFIX}/progress", self.web_progress, ["GET"], "RAG 构建进度")
+        ctx.register_web_api(f"/{ROUTE_PREFIX}/config", self.web_config_get, ["GET"], "RAG 配置读取")
+        ctx.register_web_api(f"/{ROUTE_PREFIX}/config", self.web_config_update, ["POST"], "RAG 配置保存")
+        ctx.register_web_api(f"/{ROUTE_PREFIX}/kb/delete", self.web_kb_delete, ["POST"], "RAG 删除知识库")
+        ctx.register_web_api(f"/{ROUTE_PREFIX}/kb/documents", self.web_kb_documents, ["GET"], "RAG 知识库文档列表")
+        ctx.register_web_api(f"/{ROUTE_PREFIX}/kb/document/delete", self.web_kb_document_delete, ["POST"], "RAG 删除知识库文档")
         logger.info("[RAG] 插件已加载，路由前缀 /%s", ROUTE_PREFIX)
 
     # ------------------------------------------------------------------
@@ -195,6 +200,62 @@ class RAGPlugin(Star):
             return json_response(await self.adapter.get_build_progress_dict(kb))
         except Exception as exc:
             logger.exception("[RAG] web/progress 失败")
+            return error_response(str(exc))
+
+    # ------------------------------------------------------------------
+    # 配置管理
+    # ------------------------------------------------------------------
+
+    async def web_config_get(self):
+        try:
+            return json_response(await self.adapter.get_config_payload())
+        except Exception as exc:
+            logger.exception("[RAG] web/config 读取失败")
+            return error_response(str(exc))
+
+    async def web_config_update(self):
+        try:
+            body = await request.json(default={})
+            return json_response(await self.adapter.update_config(body or {}))
+        except Exception as exc:
+            logger.exception("[RAG] web/config 保存失败")
+            return error_response(str(exc))
+
+    # ------------------------------------------------------------------
+    # 知识库 / 文档管理
+    # ------------------------------------------------------------------
+
+    async def web_kb_delete(self):
+        try:
+            body = await request.json(default={})
+            kb = (body or {}).get("kb_id") or self.adapter.default_kb
+            await self.adapter.delete_kb(kb)
+            return json_response({"deleted": kb})
+        except Exception as exc:
+            logger.exception("[RAG] web/kb/delete 失败")
+            return error_response(str(exc))
+
+    async def web_kb_documents(self):
+        try:
+            kb = request.query.get("kb_id", self.adapter.default_kb)
+            return json_response(
+                {"kb_id": kb, "documents": await self.adapter.list_documents(kb)}
+            )
+        except Exception as exc:
+            logger.exception("[RAG] web/kb/documents 失败")
+            return error_response(str(exc))
+
+    async def web_kb_document_delete(self):
+        try:
+            body = await request.json(default={})
+            kb = (body or {}).get("kb_id") or self.adapter.default_kb
+            filename = (body or {}).get("filename", "")
+            if not filename:
+                return error_response("缺少 filename", status_code=400)
+            result = await self.adapter.delete_document(kb, filename)
+            return json_response({"deleted": filename, "index": result})
+        except Exception as exc:
+            logger.exception("[RAG] web/kb/document/delete 失败")
             return error_response(str(exc))
 
     async def terminate(self) -> None:
