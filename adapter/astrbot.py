@@ -34,7 +34,6 @@ from .config_utils import (
     mask_config,
     save_search_defaults,
 )
-from .image_utils import describe_no_image, find_message_image
 
 logger = logging.getLogger("rag.adapter")
 
@@ -340,30 +339,6 @@ class AstrBotRAGAdapter:
         if not results:
             return None
         return RAGEngine.format_context(results)
-
-    async def message_image_address(self, event, image_url: str = "") -> str:
-        """LLM tool: 返回消息中图片的本地路径或 URL。
-
-        - 调用方显式给出 http/https 直链时直接返回
-        - 否则提取当前消息正文的第一张图片，其次引用消息（Reply.chain）
-        - 组件经 convert_to_file_path() 统一解析为本地路径
-          （file:// URI、本地路径原样，http URL 自动下载）
-        """
-        image_url = (image_url or "").strip()
-        if image_url.startswith(("http://", "https://")):
-            return image_url
-        get_messages = getattr(event, "get_messages", None)
-        messages = get_messages() if get_messages else []
-        comp = find_message_image(messages)
-        if comp is None:
-            return describe_no_image()
-        try:
-            converter = getattr(comp, "convert_to_file_path", None)
-            if converter is not None:
-                return await converter()
-        except Exception as exc:
-            logger.warning("[RAG] 图片路径解析失败，回退原始字段: %s", exc)
-        return comp.url or comp.file or ""
 
     async def get_build_progress_dict(self, kb_id: str) -> dict | None:
         progress = self._require_engine().get_build_progress(kb_id)
