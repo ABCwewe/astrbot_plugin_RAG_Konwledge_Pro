@@ -139,7 +139,10 @@ class RAGPlugin(Star):
 
     async def web_status(self):
         try:
-            return json_response(await self.adapter.status_dict(self.adapter.default_kb))
+            kb = request.query.get("kb_id") or self.adapter.current_kb
+            if not kb:
+                return error_response("未指定知识库 ID", status_code=400)
+            return json_response(await self.adapter.status_dict(kb))
         except Exception as exc:
             logger.exception("[RAG] web/status 失败")
             return error_response(str(exc))
@@ -164,7 +167,9 @@ class RAGPlugin(Star):
                 if defaults:
                     results = await self.adapter.search_multi(defaults, query, top_n=top_n)
                 else:
-                    kb = request.query.get("kb_id", self.adapter.default_kb)
+                    kb = request.query.get("kb_id") or self.adapter.current_kb
+                    if not kb:
+                        return error_response("未指定知识库 ID", status_code=400)
                     results = await self.adapter.search(kb, query, top_n=top_n)
             return json_response(
                 {
@@ -224,7 +229,7 @@ class RAGPlugin(Star):
 
     async def web_rebuild(self):
         try:
-            kb = request.query.get("kb_id", self.adapter.default_kb)
+            kb = request.query.get("kb_id") or self.adapter.current_kb
             return json_response(await self.adapter.rebuild(kb))
         except Exception as exc:
             logger.exception("[RAG] web/rebuild 失败")
@@ -232,7 +237,7 @@ class RAGPlugin(Star):
 
     async def web_progress(self):
         try:
-            kb = request.query.get("kb_id", self.adapter.default_kb)
+            kb = request.query.get("kb_id") or self.adapter.current_kb
             return json_response(await self.adapter.get_build_progress_dict(kb))
         except Exception as exc:
             logger.exception("[RAG] web/progress 失败")
@@ -264,7 +269,7 @@ class RAGPlugin(Star):
     async def web_kb_delete(self):
         try:
             body = await request.json(default={})
-            kb = (body or {}).get("kb_id") or self.adapter.default_kb
+            kb = (body or {}).get("kb_id") or self.adapter.current_kb
             await self.adapter.delete_kb(kb)
             return json_response({"deleted": kb})
         except Exception as exc:
@@ -293,7 +298,7 @@ class RAGPlugin(Star):
     async def web_kb_index_delete(self):
         try:
             body = await request.json(default={})
-            kb = (body or {}).get("kb_id") or self.adapter.default_kb
+            kb = (body or {}).get("kb_id") or self.adapter.current_kb
             await self.adapter.drop_index(kb)
             return json_response({"index_deleted": kb})
         except Exception as exc:
@@ -324,7 +329,7 @@ class RAGPlugin(Star):
 
     async def web_kb_documents(self):
         try:
-            kb = request.query.get("kb_id", self.adapter.default_kb)
+            kb = request.query.get("kb_id") or self.adapter.current_kb
             return json_response(
                 {"kb_id": kb, "documents": await self.adapter.list_documents(kb)}
             )
@@ -335,7 +340,7 @@ class RAGPlugin(Star):
     async def web_kb_document_delete(self):
         try:
             body = await request.json(default={})
-            kb = (body or {}).get("kb_id") or self.adapter.default_kb
+            kb = (body or {}).get("kb_id") or self.adapter.current_kb
             filename = (body or {}).get("filename", "")
             if not filename:
                 return error_response("缺少 filename", status_code=400)
