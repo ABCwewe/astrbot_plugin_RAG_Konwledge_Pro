@@ -238,7 +238,12 @@ class RAGPlugin(Star):
     async def web_progress(self):
         try:
             kb = request.query.get("kb_id") or self.adapter.current_kb
-            return json_response(await self.adapter.get_build_progress_dict(kb))
+            if not kb:
+                return error_response("未指定知识库 ID", status_code=400)
+            progress = await self.adapter.get_build_progress_dict(kb)
+            return json_response(
+                {"progress": progress, "queue": self.adapter.get_index_stats()}
+            )
         except Exception as exc:
             logger.exception("[RAG] web/progress 失败")
             return error_response(str(exc))

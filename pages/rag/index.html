@@ -212,6 +212,11 @@
         拖拽文件到此处，或点击选择（txt / md / pdf / 图片，可多选）
       </div>
       <input type="file" id="files" multiple accept=".txt,.md,.markdown,.pdf,.png,.jpg,.jpeg,.webp,.bmp,.gif" style="display:none">
+      <div id="pending-files" class="status" style="display:none"></div>
+      <div class="row" style="margin-top:10px">
+        <button class="primary" id="btn-upload">开始上传</button>
+        <button id="btn-upload-clear">清空</button>
+      </div>
       <div id="upload-status" class="status"></div>
       <h2 style="margin-top:14px">文档列表</h2>
       <div id="documents" class="status">未加载</div>
@@ -399,9 +404,13 @@
       // ---------- 知识库配置悬浮窗 ----------
       function openKbModal(kbId) {
         modalKb = kbId;
-        // 打开配置窗同时选中该库（上传目标 + 列表高亮）
+        // 打开配置窗同时选中该库（上传目标 + 列表高亮）；切换库时清空待传列表
         selectedKb = kbId;
         renderKbList();
+        if (pendingFiles.length) {
+          pendingFiles = [];
+          renderPendingList();
+        }
         $("kb-modal-title").textContent = "知识库「" + kbId + "」";
         $("kb-modal-status").textContent = "加载中…";
         $("documents").textContent = "未加载";
@@ -453,48 +462,139 @@
         if (modalKb) dropIndex(modalKb);
       });
 
+      let progressPollActive = false;
       async function pollModalProgress() {
-        if (!modalKb) return;
+        if (!modalKb || progressPollActive) return;
+        progressPollActive = true;
         try {
-          const p = await bridge.apiGet("progress", { kb_id: modalKb });
-          if (p && p.status && p.status !== "idle") {
+          const data = await bridge.apiGet("progress", { kb_id: modalKb });
+          const p = data && data.progress;
+          const q = (data && data.queue) || {};
+          const buildActive = p && p.status && p.status !== "idle";
+          const queueActive = (q.running || 0) > 0 || (q.queued || 0) > 0;
+          if (buildActive || queueActive) {
+            const parts = [];
+            if (buildActive) {
+              parts.push(
+                `构建: ${p.status} · ${p.processed_documents}/${p.total_documents} 文档 · ${p.processed_chunks} 块` +
+                (p.error ? " · " + p.error : "")
+              );
+            }
+            if (queueActive) {
+              parts.push(`索引队列: 运行 ${q.running || 0} · 等待 ${q.queued || 0} · 完成 ${q.completed || 0}（并发上限 ${q.max_concurrent || "-"}）`);
+            }
             $("modal-progress").style.display = "block";
-            $("modal-progress").textContent =
-              `构建中: ${p.status} · ${p.processed_documents}/${p.total_documents} 文档 · ${p.processed_chunks} 块` +
-              (p.error ? " · " + p.error : "");
+            $("modal-progress").textContent = parts.join("；");
             setTimeout(pollModalProgress, 2000);
           } else {
             $("modal-progress").style.display = "none";
+            progressPollActive = false;
           }
-        } catch (e) { /* ignore transient polling errors */ }
+        } catch (e) {
+          progressPollActive = false; /* ignore transient polling errors */
+        }
       }
 
-      // ---------- 上传 ----------
-      async function uploadFiles(files) {
+      // ---------- 上传（待传列表 → 分批上传 → 后端限并发索引） ----------
+      const UPLOAD_BATCH = 3;  // 每批并发上传的文件数
+      let pendingFiles = [];   // [{file, status: pending|uploading|indexed|error, error}]
+      let uploadBusy = false;
+
+      function addPendingFiles(files) {
         const list = Array.from(files || []);
-        if (!list.length || !modalKb) return;
-        setStatus("upload-status", `上传 ${list.length} 个文件到「${modalKb}」…`);
-        let ok = 0;
-        try {
-          for (const file of list) {
-            await bridge.upload("ingest", file);
-            ok++;
-          }
-          setStatus("upload-status", `已上传 ${ok} 个文件，开始索引…`, true);
-          pollModalProgress();
-          loadKbModal();
-          refreshKbs();
-        } catch (e) {
-          setStatus("upload-status", "上传失败: " + e, false);
+        for (const file of list) {
+          const dup = pendingFiles.some((p) => p.file.name === file.name && p.file.size === file.size);
+          if (!dup) pendingFiles.push({ file, status: "pending", error: "" });
         }
+        renderPendingList();
         $("files").value = "";
       }
+
+      function renderPendingList() {
+        const container = $("pending-files");
+        const btn = $("btn-upload");
+        const btnClear = $("btn-upload-clear");
+        const pendingCount = pendingFiles.filter((p) => p.status === "pending").length;
+        if (!pendingFiles.length) {
+          container.style.display = "none";
+          container.innerHTML = "";
+        } else {
+          container.style.display = "block";
+          container.innerHTML = pendingFiles.map((p, i) => {
+            const chip = p.status === "pending" ? "待上传"
+              : p.status === "uploading" ? "上传中…"
+              : p.status === "indexed" ? "已索引"
+              : "失败";
+            const chipCls = p.status === "indexed" ? "badge ok"
+              : p.status === "error" ? "badge err" : "badge warn";
+            const removeBtn = (p.status === "pending" || p.status === "error")
+              ? `<button class="danger" data-remove="${i}" title="${esc(p.error || "移除")}">移除</button>` : "";
+            return `<div class="doc-item">
+              <span class="doc-name">${esc(p.file.name)}</span>
+              <span class="doc-size">${fmtSize(p.file.size)}</span>
+              <span class="${chipCls}">${chip}</span>
+              ${removeBtn}
+            </div>`;
+          }).join("");
+          container.querySelectorAll("button[data-remove]").forEach((btnEl) => {
+            btnEl.addEventListener("click", () => {
+              pendingFiles.splice(Number(btnEl.dataset.remove), 1);
+              renderPendingList();
+            });
+          });
+        }
+        btn.disabled = pendingCount === 0 || uploadBusy;
+        btn.textContent = pendingCount ? `开始上传（${pendingCount}）` : "开始上传";
+        btnClear.disabled = uploadBusy;
+      }
+
+      async function startUpload() {
+        if (uploadBusy || !modalKb) return;
+        const queue = pendingFiles.filter((p) => p.status === "pending");
+        if (!queue.length) return;
+        uploadBusy = true;
+        renderPendingList();
+        setStatus("upload-status", `开始上传 ${queue.length} 个文件到「${modalKb}」…`);
+        let ok = 0;
+        for (let start = 0; start < queue.length; start += UPLOAD_BATCH) {
+          const batch = queue.slice(start, start + UPLOAD_BATCH);
+          batch.forEach((item) => { item.status = "uploading"; });
+          renderPendingList();
+          await Promise.all(batch.map(async (item) => {
+            try {
+              await bridge.upload("ingest", item.file);
+              item.status = "indexed";
+              ok++;
+            } catch (e) {
+              item.status = "error";
+              item.error = String(e);
+            }
+          }));
+          renderPendingList();
+          const done = Math.min(start + UPLOAD_BATCH, queue.length);
+          setStatus("upload-status", `进度 ${done}/${queue.length}…（后端按并发限制排队索引，见下方队列状态）`);
+          pollModalProgress();
+        }
+        setStatus("upload-status", `完成：${ok}/${queue.length} 个文件已上传并索引`, ok === queue.length);
+        uploadBusy = false;
+        renderPendingList();
+        pollModalProgress();
+        loadKbModal();
+        refreshKbs();
+      }
+      $("btn-upload").addEventListener("click", startUpload);
+      $("btn-upload-clear").addEventListener("click", () => {
+        if (uploadBusy) return;
+        pendingFiles = [];
+        renderPendingList();
+        setStatus("upload-status", "", true);
+      });
 
       function setupDropzone() {
         const zone = $("dropzone");
         const input = $("files");
         zone.addEventListener("click", () => input.click());
-        input.addEventListener("change", () => uploadFiles(input.files));
+        input.addEventListener("change", () => addPendingFiles(input.files));
         ["dragenter", "dragover"].forEach((evt) => {
           zone.addEventListener(evt, (e) => { e.preventDefault(); zone.classList.add("dragover"); });
         });
@@ -503,7 +603,7 @@
         });
         zone.addEventListener("drop", (e) => {
           if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) {
-            uploadFiles(e.dataTransfer.files);
+            addPendingFiles(e.dataTransfer.files);
           }
         });
       }

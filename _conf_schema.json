@@ -95,6 +95,12 @@
     "description": "最终返回数 Top-N",
     "group": "retrieval"
   },
+  "ingest_concurrency": {
+    "type": "int",
+    "default": 2,
+    "description": "同时进行索引操作的最大并发数（上传多个文件时后端排队执行，可调大以加速批量导入）",
+    "group": "general"
+  },
   "chunk_separator": {
     "type": "string",
     "default": "\n\n",

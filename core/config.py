@@ -89,6 +89,9 @@ class RAGConfig:
     top_k: int = 30
     top_n: int = 6
     kb_id: str = "default"
+    #: Max concurrent index operations (rebuild/incremental sync) across the
+    #: engine. Multiple uploads are queued server-side beyond this limit.
+    ingest_concurrency: int = 2
 
     # -- construction -----------------------------------------------------
 
@@ -149,6 +152,7 @@ class RAGConfig:
                 top_k=int(data.get("top_k", 30)),
                 top_n=int(data.get("top_n", 6)),
                 kb_id=str(data.get("kb_id", "default")),
+                ingest_concurrency=int(data.get("ingest_concurrency", 2)),
             )
         except (TypeError, ValueError) as exc:  # pragma: no cover - defensive
             raise ConfigurationError(f"无效的 RAG 配置: {exc}") from exc
@@ -188,6 +192,8 @@ class RAGConfig:
             raise ConfigurationError("rerank.enabled 时需配置 rerank.api_base/api_key/model")
         if self.top_k <= 0 or self.top_n <= 0:
             raise ConfigurationError("top_k/top_n 必须大于 0")
+        if self.ingest_concurrency <= 0:
+            raise ConfigurationError("ingest_concurrency 必须大于 0")
 
     # -- config hash ------------------------------------------------------
 

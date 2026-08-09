@@ -103,6 +103,7 @@ class RAGEngine:
             self._cache,
             self._data_root,
             image_embedding=self._image_embedding,
+            ingest_concurrency=config.ingest_concurrency,
         )
         self._retriever = Retriever(
             self._store,
@@ -225,6 +226,10 @@ class RAGEngine:
 
     def get_build_progress(self, kb_id: str) -> BuildProgress | None:
         return self._manager.get_progress(kb_id)
+
+    def get_index_stats(self) -> dict:
+        """Live index-queue stats (running / queued / completed / max)."""
+        return self._manager.get_index_stats()
 
     # -- retrieval --------------------------------------------------------
 

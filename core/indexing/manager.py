@@ -50,6 +50,46 @@ from .manifest import (
 logger = logging.getLogger("rag.index.manager")
 
 
+class _IndexLimiter:
+    """Global concurrency limiter for index operations (rebuild/sync).
+
+    Reports live queue stats (running / queued / completed) so the WebUI can
+    mirror indexing progress while uploads stream in.
+    """
+
+    def __init__(self, max_concurrent: int) -> None:
+        self._max = max(1, max_concurrent)
+        self._running = 0
+        self._queued = 0
+        self._completed = 0
+        self._cond = asyncio.Condition()
+
+    async def __aenter__(self) -> "_IndexLimiter":
+        async with self._cond:
+            if self._running >= self._max:
+                self._queued += 1
+                try:
+                    await self._cond.wait_for(lambda: self._running < self._max)
+                finally:
+                    self._queued -= 1
+            self._running += 1
+        return self
+
+    async def __aexit__(self, *exc) -> None:
+        async with self._cond:
+            self._running -= 1
+            self._completed += 1
+            self._cond.notify_all()
+
+    def stats(self) -> dict:
+        return {
+            "running": self._running,
+            "queued": self._queued,
+            "completed": self._completed,
+            "max_concurrent": self._max,
+        }
+
+
 @dataclass
 class BuildProgress:
     kb_id: str
@@ -89,6 +129,7 @@ class IndexManager:
         *,
         image_embedding: EmbeddingProvider | None = None,
         parsers: ParserRegistry | None = None,
+        ingest_concurrency: int = 2,
     ) -> None:
         self._store = store
         self._embedding = embedding
@@ -99,6 +140,11 @@ class IndexManager:
         self._data_root = Path(data_root)
         self._locks: dict[str, asyncio.Lock] = {}
         self._progress: dict[str, BuildProgress] = {}
+        self._limiter = _IndexLimiter(ingest_concurrency)
+
+    def get_index_stats(self) -> dict:
+        """Live index-queue stats: running / queued / completed / max."""
+        return self._limiter.stats()
 
     # -- paths ------------------------------------------------------------
 
@@ -178,20 +224,21 @@ class IndexManager:
         ):
             raise IndexNotFoundError(f"知识库 {kb_id} 没有可用的 READY 索引")
 
-        doc_paths = self._list_docs(kb_id)
-        documents = await store.load_documents()
-        indexer = self._make_indexer()
-        stats = await indexer.sync_documents(
-            manifest.collection_name,
-            kb_id,
-            self._docs_dir(kb_id),
-            doc_paths,
-            documents,
-        )
-        await store.save_documents(documents)
-        manifest.document_count = len(documents)
-        manifest.chunk_count = stats.chunks_written
-        await store.save_manifest(manifest)
+        async with self._limiter:
+            doc_paths = self._list_docs(kb_id)
+            documents = await store.load_documents()
+            indexer = self._make_indexer()
+            stats = await indexer.sync_documents(
+                manifest.collection_name,
+                kb_id,
+                self._docs_dir(kb_id),
+                doc_paths,
+                documents,
+            )
+            await store.save_documents(documents)
+            manifest.document_count = len(documents)
+            manifest.chunk_count = stats.chunks_written
+            await store.save_manifest(manifest)
         logger.info(
             "[INDEX] 增量同步完成 (kb=%s): added=%d updated=%d unchanged=%d deleted=%d",
             kb_id,
@@ -304,101 +351,104 @@ class IndexManager:
         progress.started_at = _now()
         _touch(progress)
 
-        try:
-            vectors = {"text": config.embedding.dimension}
-            if config.image.enabled:
-                vectors["image"] = int(config.image.dimension or 0)
-            # A collection with the target name can never be referenced by a
-            # READY manifest (next_version > every manifest version), so if it
-            # exists it is an orphan from an aborted build — drop it first.
-            if await self._store.collection_exists(collection):
-                logger.warning("[INDEX] 清理遗留 collection: %s", collection)
-                await self._store.delete_collection(collection)
-            await self._store.create_collection(collection, vectors)
-            logger.info("[INDEX] 已创建新 collection: %s", collection)
-
-            manifest.status = STATUS_BUILDING
-            await store.save_manifest(manifest)
-            progress.status = STATUS_BUILDING
-            _touch(progress)
-
-            doc_paths = self._list_docs(kb_id)
-            progress.total_documents = len(doc_paths)
-            # Fresh registry: a rebuild must re-index everything, even files
-            # whose content hash is unchanged (chunking/embedding may differ).
-            documents: dict[str, DocumentRecord] = {}
-            indexer = self._make_indexer()
-            stats = await indexer.sync_documents(
-                collection,
-                kb_id,
-                self._docs_dir(kb_id),
-                doc_paths,
-                documents,
-                progress=lambda done, total, chunks: (
-                    self._tick_progress(kb_id, done, total, chunks)
-                ),
-            )
-            if stats.errors:
-                raise IndexBuildError("部分文档索引失败: " + "; ".join(stats.errors[:5]))
-
-            await self._verify(collection, documents, stats)
-
-            manifest.document_count = len(documents)
-            manifest.chunk_count = stats.chunks_written
-            manifest.status = STATUS_READY
-            manifest.error = None
-            await store.save_manifest(manifest)
-            await store.save_documents(documents)
-
-            await store.save_active(
-                ActiveState(
-                    kb_id=kb_id,
-                    active_version=next_version,
-                    config_hash=config.config_hash(),
-                )
-            )
-            progress.status = STATUS_READY
-            progress.processed_chunks = stats.chunks_written
-            _touch(progress)
-            logger.info(
-                "[INDEX] 索引构建完成，切换到 %s (kb=%s)", collection, kb_id
-            )
-
-            # Best-effort cleanup of superseded versions.
-            for version, old in manifests.items():
-                if version == next_version:
-                    continue
-                try:
-                    await self._store.delete_collection(old.collection_name)
-                    logger.info(
-                        "[INDEX] 已删除旧 collection: %s", old.collection_name
-                    )
-                except QdrantError as exc:
-                    logger.warning("[QDRANT] 删除旧 collection 失败: %s", exc)
-                await store.delete_manifest(version)
-
-            return {
-                "action": "rebuilt",
-                "version": next_version,
-                "collection": collection,
-                "documents": len(documents),
-                "chunks": stats.chunks_written,
-            }
-        except Exception as exc:
-            logger.exception("[INDEX] 重建失败，回滚 (kb=%s)", kb_id)
-            manifest.status = STATUS_FAILED
-            manifest.error = str(exc)
-            await store.save_manifest(manifest)
-            progress.status = STATUS_FAILED
-            progress.error = str(exc)
-            _touch(progress)
+        async with self._limiter:
             try:
-                await self._store.delete_collection(collection)
-            except QdrantError:
-                logger.warning("[QDRANT] 回滚删除失败: %s", collection)
-            if isinstance(exc, (IndexBuildError, ConfigurationError)):
-                raise
-            raise IndexBuildError(f"索引重建失败: {exc}") from exc
+                vectors = {"text": config.embedding.dimension}
+                if config.image.enabled:
+                    vectors["image"] = int(config.image.dimension or 0)
+                # A collection with the target name can never be referenced by a
+                # READY manifest (next_version > every manifest version), so if it
+                # exists it is an orphan from an aborted build — drop it first.
+                if await self._store.collection_exists(collection):
+                    logger.warning("[INDEX] 清理遗留 collection: %s", collection)
+                    await self._store.delete_collection(collection)
+                await self._store.create_collection(collection, vectors)
+                logger.info("[INDEX] 已创建新 collection: %s", collection)
+
+                manifest.status = STATUS_BUILDING
+                await store.save_manifest(manifest)
+                progress.status = STATUS_BUILDING
+                _touch(progress)
+
+                doc_paths = self._list_docs(kb_id)
+                progress.total_documents = len(doc_paths)
+                # Fresh registry: a rebuild must re-index everything, even files
+                # whose content hash is unchanged (chunking/embedding may differ).
+                documents: dict[str, DocumentRecord] = {}
+                indexer = self._make_indexer()
+                stats = await indexer.sync_documents(
+                    collection,
+                    kb_id,
+                    self._docs_dir(kb_id),
+                    doc_paths,
+                    documents,
+                    progress=lambda done, total, chunks: (
+                        self._tick_progress(kb_id, done, total, chunks)
+                    ),
+                )
+                if stats.errors:
+                    raise IndexBuildError(
+                        "部分文档索引失败: " + "; ".join(stats.errors[:5])
+                    )
+
+                await self._verify(collection, documents, stats)
+
+                manifest.document_count = len(documents)
+                manifest.chunk_count = stats.chunks_written
+                manifest.status = STATUS_READY
+                manifest.error = None
+                await store.save_manifest(manifest)
+                await store.save_documents(documents)
+
+                await store.save_active(
+                    ActiveState(
+                        kb_id=kb_id,
+                        active_version=next_version,
+                        config_hash=config.config_hash(),
+                    )
+                )
+                progress.status = STATUS_READY
+                progress.processed_chunks = stats.chunks_written
+                _touch(progress)
+                logger.info(
+                    "[INDEX] 索引构建完成，切换到 %s (kb=%s)", collection, kb_id
+                )
+
+                # Best-effort cleanup of superseded versions.
+                for version, old in manifests.items():
+                    if version == next_version:
+                        continue
+                    try:
+                        await self._store.delete_collection(old.collection_name)
+                        logger.info(
+                            "[INDEX] 已删除旧 collection: %s", old.collection_name
+                        )
+                    except QdrantError as exc:
+                        logger.warning("[QDRANT] 删除旧 collection 失败: %s", exc)
+                    await store.delete_manifest(version)
+
+                return {
+                    "action": "rebuilt",
+                    "version": next_version,
+                    "collection": collection,
+                    "documents": len(documents),
+                    "chunks": stats.chunks_written,
+                }
+            except Exception as exc:
+                logger.exception("[INDEX] 重建失败，回滚 (kb=%s)", kb_id)
+                manifest.status = STATUS_FAILED
+                manifest.error = str(exc)
+                await store.save_manifest(manifest)
+                progress.status = STATUS_FAILED
+                progress.error = str(exc)
+                _touch(progress)
+                try:
+                    await self._store.delete_collection(collection)
+                except QdrantError:
+                    logger.warning("[QDRANT] 回滚删除失败: %s", collection)
+                if isinstance(exc, (IndexBuildError, ConfigurationError)):
+                    raise
+                raise IndexBuildError(f"索引重建失败: {exc}") from exc
 
     async def _verify(
         self, collection: str, documents: dict[str, DocumentRecord], stats: IndexStats

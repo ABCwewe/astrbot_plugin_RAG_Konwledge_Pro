@@ -208,6 +208,7 @@ class AstrBotRAGAdapter:
                 },
                 "top_k": int(cfg.get("top_k", 30)),
                 "top_n": int(cfg.get("top_n", 6)),
+                "ingest_concurrency": int(cfg.get("ingest_concurrency", 2)),
             }
         )
 
@@ -388,6 +389,9 @@ class AstrBotRAGAdapter:
     async def get_build_progress_dict(self, kb_id: str) -> dict | None:
         progress = self._require_engine().get_build_progress(kb_id)
         return progress.to_dict() if progress else None
+
+    def get_index_stats(self) -> dict:
+        return self._require_engine().get_index_stats()
 
     # -- config management (WebUI) ----------------------------------------
 
