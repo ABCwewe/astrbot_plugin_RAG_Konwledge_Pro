@@ -302,7 +302,13 @@ class RAGPlugin(Star):
 
     async def web_kb_defaults_get(self):
         try:
-            return json_response({"kb_ids": self.adapter.get_default_search_kbs()})
+            return json_response(
+                {
+                    "kb_ids": self.adapter.get_default_search_kbs(),
+                    "default_kb": self.adapter.default_kb,
+                    "selected_kb": self.adapter.current_kb,
+                }
+            )
         except Exception as exc:
             logger.exception("[RAG] web/kb/defaults 读取失败")
             return error_response(str(exc))

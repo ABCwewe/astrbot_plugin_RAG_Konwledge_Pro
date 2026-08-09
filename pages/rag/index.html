@@ -72,6 +72,7 @@
       display: flex; align-items: center; gap: 10px;
       border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
     }
+    .kb-item.selected { border-color: var(--accent); background: var(--drop); }
     .kb-name { font-weight: 600; min-width: 120px; }
     .kb-stats { color: var(--muted); font-size: 12px; flex: 1; }
 
@@ -255,6 +256,8 @@
       let bridge = null;
       let kbs = [];
       let modalKb = null;
+      let selectedKb = null;   // 当前选中的知识库（上传目标，服务端同步）
+      let defaultKb = null;    // 默认知识库 ID（default_kb_id 配置）
       let searchKbs = new Set();
       let defaultsKbs = new Set();
       let schema = {};
@@ -313,30 +316,33 @@
       });
 
       // ---------- 知识库列表 ----------
+      function renderKbList() {
+        if (!kbs.length) { $("kb-list").textContent = "（暂无知识库，可新建）"; return; }
+        $("kb-list").innerHTML = kbs.map((kb) => {
+          const cls = kb.status === "READY" ? "ok" : kb.status === "FAILED" ? "err" : "warn";
+          const sel = kb.kb_id === selectedKb;
+          return `<div class="kb-item ${sel ? "selected" : ""}" data-kb="${esc(kb.kb_id)}">
+            <span class="kb-name">${esc(kb.kb_id)}${sel ? ' <span class="badge ok">当前</span>' : ""}</span>
+            <span class="badge ${cls}">${esc(kb.status)}</span>
+            <span class="kb-stats">v${kb.active_version ?? "-"} · 文档 ${kb.document_count} · 块 ${kb.chunk_count}</span>
+            <button class="primary" data-act="config">配置</button>
+            <button data-act="drop-index">删除索引</button>
+            <button class="danger" data-act="delete">删除</button>
+          </div>`;
+        }).join("");
+        $("kb-list").querySelectorAll(".kb-item").forEach((item) => {
+          const kbId = item.dataset.kb;
+          item.querySelector('[data-act="config"]').addEventListener("click", () => openKbModal(kbId));
+          item.querySelector('[data-act="drop-index"]').addEventListener("click", () => dropIndex(kbId));
+          item.querySelector('[data-act="delete"]').addEventListener("click", () => deleteKb(kbId));
+        });
+      }
+
       async function refreshKbs() {
         $("kb-list").textContent = "加载中…";
         try {
           kbs = await bridge.apiGet("list") || [];
-          if (!kbs.length) { $("kb-list").textContent = "（暂无知识库，可新建）"; }
-          else {
-            $("kb-list").innerHTML = kbs.map((kb) => {
-              const cls = kb.status === "READY" ? "ok" : kb.status === "FAILED" ? "err" : "warn";
-              return `<div class="kb-item" data-kb="${esc(kb.kb_id)}">
-                <span class="kb-name">${esc(kb.kb_id)}</span>
-                <span class="badge ${cls}">${esc(kb.status)}</span>
-                <span class="kb-stats">v${kb.active_version ?? "-"} · 文档 ${kb.document_count} · 块 ${kb.chunk_count}</span>
-                <button class="primary" data-act="config">配置</button>
-                <button data-act="drop-index">删除索引</button>
-                <button class="danger" data-act="delete">删除</button>
-              </div>`;
-            }).join("");
-            $("kb-list").querySelectorAll(".kb-item").forEach((item) => {
-              const kbId = item.dataset.kb;
-              item.querySelector('[data-act="config"]').addEventListener("click", () => openKbModal(kbId));
-              item.querySelector('[data-act="drop-index"]').addEventListener("click", () => dropIndex(kbId));
-              item.querySelector('[data-act="delete"]').addEventListener("click", () => deleteKb(kbId));
-            });
-          }
+          renderKbList();
           renderDefaultChecks();
         } catch (e) {
           $("kb-list").textContent = "列表加载失败: " + e;
@@ -350,6 +356,9 @@
           await bridge.apiPost("kb/create", { kb_id: kbId });
           setStatus("kb-list", `已创建知识库「${kbId}」`, true);
           $("new-kb").value = "";
+          // 新建后自动选中该库（上传目标与列表高亮）
+          selectedKb = kbId;
+          await bridge.apiPost("kb/select", { kb_id: kbId }).catch(() => {});
           refreshKbs();
           loadDefaults();
         } catch (e) {
@@ -362,6 +371,10 @@
           try {
             await bridge.apiPost("kb/delete", { kb_id: kbId });
             setStatus("kb-list", `已删除知识库「${kbId}」`, true);
+            if (selectedKb === kbId) {
+              selectedKb = defaultKb;
+              if (selectedKb) bridge.apiPost("kb/select", { kb_id: selectedKb }).catch(() => {});
+            }
             refreshKbs();
             loadDefaults();
           } catch (e) {
@@ -386,6 +399,9 @@
       // ---------- 知识库配置悬浮窗 ----------
       function openKbModal(kbId) {
         modalKb = kbId;
+        // 打开配置窗同时选中该库（上传目标 + 列表高亮）
+        selectedKb = kbId;
+        renderKbList();
         $("kb-modal-title").textContent = "知识库「" + kbId + "」";
         $("kb-modal-status").textContent = "加载中…";
         $("documents").textContent = "未加载";
@@ -534,7 +550,16 @@
         try {
           const data = await bridge.apiGet("kb/defaults");
           defaultsKbs = new Set(data.kb_ids || []);
+          defaultKb = data.default_kb || null;
+          // 默认选中：服务端当前选中库优先，其次默认知识库
+          if (selectedKb !== data.selected_kb && data.selected_kb) {
+            selectedKb = data.selected_kb;
+          } else if (!selectedKb && defaultKb) {
+            selectedKb = defaultKb;
+            bridge.apiPost("kb/select", { kb_id: selectedKb }).catch(() => {});
+          }
           renderDefaultChecks();
+          renderKbList();
         } catch (e) {
           $("defaults-kbs").textContent = "加载失败: " + e;
         }
@@ -702,7 +727,7 @@
         $("btn-config-save").onclick = saveConfig;
         $("query").addEventListener("keydown", (e) => { if (e.key === "Enter") search(); });
         setupDropzone();
-        refreshKbs();
+        await refreshKbs();   // 先加载列表，再应用默认选中（避免渲染竞态）
         loadDefaults();
         loadConfig();
       }
