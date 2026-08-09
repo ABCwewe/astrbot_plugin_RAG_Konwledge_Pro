@@ -459,6 +459,14 @@ class AstrBotRAGAdapter:
             raise ConfigurationError("知识库 ID 不能为空")
         return await self._require_engine().create_kb(kb_id.strip())
 
+    async def receive_upload(self, kb_id: str, filename: str, saver) -> str:
+        """原子接收上传文件到收件箱（不索引，由后台工人波次处理）。"""
+        return await self._require_engine().receive_upload(kb_id, filename, saver)
+
+    def get_queue_stats(self) -> dict:
+        """动态索引队列状态（收件箱待索引 + 限流统计）。"""
+        return self._require_engine().get_upload_stats()
+
     # -- 默认聚合检索知识库 ------------------------------------------------
 
     def _require_data_dir(self) -> Path:

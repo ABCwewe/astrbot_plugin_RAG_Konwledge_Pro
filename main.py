@@ -6,8 +6,6 @@ stay in ``core/`` and are reached through the adapter.
 
 from __future__ import annotations
 
-import shutil
-import tempfile
 from pathlib import Path
 
 from astrbot.api import logger
@@ -193,36 +191,28 @@ class RAGPlugin(Star):
 
     async def web_ingest(self):
         try:
-            # 上传接口无法携带查询参数（bridge 限制），目标知识库由
-            # kb/select 设置（request.query 仍兼容旧调用方）。
+            # 上传只负责原子落盘到收件箱，立即返回；索引由后台工人按波次
+            # 合并执行（受 ingest_concurrency 限流），见 /progress 队列状态。
             kb = request.query.get("kb_id") or self.adapter.current_kb
             files = await request.files()
             if not files:
                 return error_response("未收到文件", status_code=400)
-            # 先落到插件专属临时目录（data/plugin_data/<plugin>/tmp/），
-            # 再由 engine 拷贝进知识库目录（避免直接写 docs 目录后又被
-            # engine 重复拷贝而触发文件占用错误）。
-            stage_dir = Path(tempfile.mkdtemp(prefix="rag_upload_", dir=str(self.adapter.tmp_dir)))
             saved = []
-            try:
-                for _name, upload in files.items():
-                    if not upload.filename:
-                        continue
-                    if Path(upload.filename).suffix.lower() not in _SUPPORTED_EXTS:
-                        continue
-                    dest = stage_dir / Path(upload.filename).name
-                    await upload.save(dest)
-                    saved.append(dest)
-                if not saved:
-                    return error_response("没有可导入的支持文件", status_code=400)
-                result = await self.adapter.ingest(
-                    kb, [str(p) for p in saved]
-                )
-                return json_response(
-                    {"saved": [p.name for p in saved], "index": result}
-                )
-            finally:
-                shutil.rmtree(stage_dir, ignore_errors=True)
+            for _name, upload in files.items():
+                if not upload.filename:
+                    continue
+                if Path(upload.filename).suffix.lower() not in _SUPPORTED_EXTS:
+                    continue
+                try:
+                    await self.adapter.receive_upload(
+                        kb, upload.filename, lambda tmp: upload.save(tmp)
+                    )
+                    saved.append(Path(upload.filename).name)
+                except Exception as exc:
+                    logger.warning("[RAG] 上传文件失败: %s (%s)", upload.filename, exc)
+            if not saved:
+                return error_response("没有可导入的支持文件", status_code=400)
+            return json_response({"saved": saved, "queued": True})
         except Exception as exc:
             logger.exception("[RAG] web/ingest 失败")
             return error_response(str(exc))
@@ -242,7 +232,7 @@ class RAGPlugin(Star):
                 return error_response("未指定知识库 ID", status_code=400)
             progress = await self.adapter.get_build_progress_dict(kb)
             return json_response(
-                {"progress": progress, "queue": self.adapter.get_index_stats()}
+                {"progress": progress, "queue": self.adapter.get_queue_stats()}
             )
         except Exception as exc:
             logger.exception("[RAG] web/progress 失败")

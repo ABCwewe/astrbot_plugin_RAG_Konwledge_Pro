@@ -141,10 +141,15 @@ class IndexManager:
         self._locks: dict[str, asyncio.Lock] = {}
         self._progress: dict[str, BuildProgress] = {}
         self._limiter = _IndexLimiter(ingest_concurrency)
+        self._op_counts = {"rebuild": 0, "sync": 0}
 
     def get_index_stats(self) -> dict:
         """Live index-queue stats: running / queued / completed / max."""
         return self._limiter.stats()
+
+    def get_op_counts(self) -> dict:
+        """Index operation counters (rebuild / sync waves)."""
+        return dict(self._op_counts)
 
     # -- paths ------------------------------------------------------------
 
@@ -209,6 +214,7 @@ class IndexManager:
 
     async def sync(self, kb_id: str, config: RAGConfig) -> dict:
         """Incremental add/update/delete against the active READY index."""
+        self._op_counts["sync"] += 1
         store = self._manifest_store(kb_id)
         active = await store.load_active()
         manifest = (
@@ -331,6 +337,7 @@ class IndexManager:
     # -- internals --------------------------------------------------------
 
     async def _rebuild_locked(self, kb_id: str, config: RAGConfig) -> dict:
+        self._op_counts["rebuild"] += 1
         store = self._manifest_store(kb_id)
         manifests = await store.list_manifests()
         active = await store.load_active()

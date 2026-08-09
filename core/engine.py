@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import shutil
+import uuid
 from pathlib import Path
 
 from .chunking import TextChunker
@@ -112,6 +114,11 @@ class RAGEngine:
             config,
             image_embedding=self._image_embedding,
         )
+        # 上传队列：收件箱原子落盘 → 后台工人按波次合并索引
+        self._inflight_parts: set[str] = set()
+        self._worker_task = asyncio.create_task(
+            self._upload_worker(), name="rag-upload-worker"
+        )
 
     # -- knowledge base management ----------------------------------------
 
@@ -148,6 +155,142 @@ class RAGEngine:
 
     def docs_dir(self, kb_id: str) -> Path:
         return self.kb_root(kb_id) / "documents"
+
+    def inbox_dir(self, kb_id: str) -> Path:
+        """上传收件箱：文件先原子落盘到这里，由后台工人波次移入 documents。"""
+        return self.kb_root(kb_id) / "inbox"
+
+    async def receive_upload(
+        self, kb_id: str, filename: str, saver
+    ) -> str:
+        """原子接收一个上传文件（AGENTS.md 数据一致性）。
+
+        写入 ``inbox/.upload-<uuid>.part``，完整成功后才 ``os.replace``
+        发布为正式文件名；任何中断/异常都会清理临时文件，知识库内
+        不会出现半截文件。``saver(tmp_path)`` 为异步写入回调。
+        """
+        from .exceptions import ConfigurationError, ParserError
+
+        if not kb_id or not kb_id.strip():
+            raise ConfigurationError("知识库 ID 不能为空")
+        name = Path(filename).name
+        if not name or name.startswith("."):
+            raise ParserError(f"非法的文件名: {filename}")
+        inbox = self.inbox_dir(kb_id)
+        inbox.mkdir(parents=True, exist_ok=True)
+        tmp = inbox / f".upload-{uuid.uuid4().hex}.part"
+        self._inflight_parts.add(str(tmp))
+        try:
+            await saver(tmp)
+            os.replace(tmp, inbox / name)
+        except BaseException:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
+        finally:
+            self._inflight_parts.discard(str(tmp))
+        return str(inbox / name)
+
+    # -- 上传队列后台工人 --------------------------------------------------
+
+    async def _upload_worker(self) -> None:
+        """后台索引工人：轮询各知识库收件箱，按波次合并索引。
+
+        - 波次 = 一次收集当前全部已发布文件 → 移入 documents → 一次
+          ensure_index（受 ingest_concurrency 限流）
+        - 上传与索引完全解耦：前端可先传完，后端按动态队列持续消费
+        """
+        while True:
+            try:
+                await self._drain_uploads_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("[RAG] 上传队列处理异常")
+            await asyncio.sleep(0.5)
+
+    async def _drain_uploads_once(self) -> None:
+        kbs_dir = self._data_root / "kbs"
+        if not kbs_dir.exists():
+            return
+        waves: list[asyncio.Task] = []
+        for child in kbs_dir.iterdir():
+            if not child.is_dir():
+                continue
+            inbox = child / "inbox"
+            if not inbox.is_dir():
+                continue
+            # 清理残留临时文件（非进行中的 .part）
+            for part in list(inbox.iterdir()):
+                if (
+                    part.is_file()
+                    and part.name.startswith(".")
+                    and str(part) not in self._inflight_parts
+                ):
+                    try:
+                        part.unlink()
+                    except OSError:
+                        pass
+            published = [
+                p
+                for p in inbox.iterdir()
+                if p.is_file() and not p.name.startswith(".")
+            ]
+            if not published:
+                continue
+            waves.append(
+                asyncio.create_task(
+                    self._index_wave(child.name, published), name="rag-wave"
+                )
+            )
+        if waves:
+            await asyncio.gather(*waves, return_exceptions=True)
+
+    async def _index_wave(self, kb_id: str, inbox_files: list[Path]) -> None:
+        docs = self.docs_dir(kb_id)
+        docs.mkdir(parents=True, exist_ok=True)
+        moved = 0
+        for src in inbox_files:
+            try:
+                os.replace(src, docs / src.name)
+                moved += 1
+            except OSError as exc:
+                logger.warning("[RAG] 移动上传文件失败: %s (%s)", src, exc)
+        if moved:
+            logger.info("[RAG] 上传队列波次: kb=%s 文件=%d", kb_id, moved)
+        await self._manager.ensure_index(kb_id, self.config)
+
+    def get_upload_stats(self) -> dict:
+        """动态队列状态：收件箱待索引数 + 索引限流统计。"""
+        pending = 0
+        by_kb: dict[str, int] = {}
+        kbs_dir = self._data_root / "kbs"
+        if kbs_dir.exists():
+            for child in kbs_dir.iterdir():
+                if not child.is_dir():
+                    continue
+                inbox = child / "inbox"
+                if not inbox.is_dir():
+                    continue
+                n = sum(
+                    1
+                    for f in inbox.iterdir()
+                    if f.is_file() and not f.name.startswith(".")
+                )
+                if n:
+                    by_kb[child.name] = n
+                    pending += n
+        return {
+            **self._manager.get_index_stats(),
+            "inbox_pending": pending,
+            "inbox_by_kb": by_kb,
+        }
+
+    def get_index_op_counts(self) -> dict:
+        """索引操作计数（rebuild/sync），测试与观测用。"""
+        return self._manager.get_op_counts()
 
     async def ingest(self, kb_id: str, paths: list[str | Path]) -> dict:
         """Copy files into the KB document directory, then sync the index.
@@ -366,6 +509,12 @@ class RAGEngine:
     # -- lifecycle --------------------------------------------------------
 
     async def close(self) -> None:
+        if self._worker_task is not None:
+            self._worker_task.cancel()
+            try:
+                await self._worker_task
+            except (asyncio.CancelledError, Exception):
+                pass
         for client in (self._embedding, self._image_embedding, self._reranker):
             close = getattr(client, "close", None)
             if close is not None:

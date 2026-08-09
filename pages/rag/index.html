@@ -471,7 +471,7 @@
           const p = data && data.progress;
           const q = (data && data.queue) || {};
           const buildActive = p && p.status && p.status !== "idle";
-          const queueActive = (q.running || 0) > 0 || (q.queued || 0) > 0;
+          const queueActive = (q.running || 0) > 0 || (q.queued || 0) > 0 || (q.inbox_pending || 0) > 0;
           if (buildActive || queueActive) {
             const parts = [];
             if (buildActive) {
@@ -481,24 +481,39 @@
               );
             }
             if (queueActive) {
-              parts.push(`索引队列: 运行 ${q.running || 0} · 等待 ${q.queued || 0} · 完成 ${q.completed || 0}（并发上限 ${q.max_concurrent || "-"}）`);
+              const inbox = q.inbox_by_kb || {};
+              const perKb = Object.entries(inbox)
+                .filter(([, n]) => n > 0)
+                .map(([kb, n]) => `${kb}:${n}`)
+                .join(" ");
+              parts.push(
+                `索引队列: 待索引 ${q.inbox_pending || 0}${perKb ? "（" + perKb + "）" : ""} · 运行 ${q.running || 0} · 等待 ${q.queued || 0} · 完成 ${q.completed || 0}（并发上限 ${q.max_concurrent || "-"}）`
+              );
             }
             $("modal-progress").style.display = "block";
             $("modal-progress").textContent = parts.join("；");
-            setTimeout(pollModalProgress, 2000);
+            setTimeout(pollModalProgress, 1500);
           } else {
             $("modal-progress").style.display = "none";
             progressPollActive = false;
+            // 上传全部完成后队列排空 → 刷新文档列表与知识库统计
+            if (awaitingDrain) {
+              awaitingDrain = false;
+              setStatus("upload-status", "全部文件已上传并完成索引", true);
+              loadKbModal();
+              refreshKbs();
+            }
           }
         } catch (e) {
           progressPollActive = false; /* ignore transient polling errors */
         }
       }
 
-      // ---------- 上传（待传列表 → 分批上传 → 后端限并发索引） ----------
-      const UPLOAD_BATCH = 3;  // 每批并发上传的文件数
-      let pendingFiles = [];   // [{file, status: pending|uploading|indexed|error, error}]
+      // ---------- 上传（待传列表 → 快速上传 → 后端动态队列索引） ----------
+      const UPLOAD_BATCH = 3;  // 每批并发上传请求数（上传不等待索引）
+      let pendingFiles = [];   // [{file, status: pending|uploading|uploaded|error, error}]
       let uploadBusy = false;
+      let awaitingDrain = false;  // 上传已全部完成，等待索引队列排空
 
       function addPendingFiles(files) {
         const list = Array.from(files || []);
@@ -523,9 +538,9 @@
           container.innerHTML = pendingFiles.map((p, i) => {
             const chip = p.status === "pending" ? "待上传"
               : p.status === "uploading" ? "上传中…"
-              : p.status === "indexed" ? "已索引"
+              : p.status === "uploaded" ? "已上传（排队索引）"
               : "失败";
-            const chipCls = p.status === "indexed" ? "badge ok"
+            const chipCls = p.status === "uploaded" ? "badge ok"
               : p.status === "error" ? "badge err" : "badge warn";
             const removeBtn = (p.status === "pending" || p.status === "error")
               ? `<button class="danger" data-remove="${i}" title="${esc(p.error || "移除")}">移除</button>` : "";
@@ -562,8 +577,8 @@
           renderPendingList();
           await Promise.all(batch.map(async (item) => {
             try {
-              await bridge.upload("ingest", item.file);
-              item.status = "indexed";
+              await bridge.upload("ingest", item.file);  // 响应即"已上传"，不等索引
+              item.status = "uploaded";
               ok++;
             } catch (e) {
               item.status = "error";
@@ -571,16 +586,12 @@
             }
           }));
           renderPendingList();
-          const done = Math.min(start + UPLOAD_BATCH, queue.length);
-          setStatus("upload-status", `进度 ${done}/${queue.length}…（后端按并发限制排队索引，见下方队列状态）`);
-          pollModalProgress();
         }
-        setStatus("upload-status", `完成：${ok}/${queue.length} 个文件已上传并索引`, ok === queue.length);
         uploadBusy = false;
+        awaitingDrain = true;
         renderPendingList();
+        setStatus("upload-status", `上传完成 ${ok}/${queue.length} 个，后端排队索引中（见下方队列状态）…`, true);
         pollModalProgress();
-        loadKbModal();
-        refreshKbs();
       }
       $("btn-upload").addEventListener("click", startUpload);
       $("btn-upload-clear").addEventListener("click", () => {
