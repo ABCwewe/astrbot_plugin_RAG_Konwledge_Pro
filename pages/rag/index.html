@@ -692,12 +692,15 @@
           <label class="${defaultsKbs.has(kb.kb_id) ? "checked" : ""}" data-kb="${esc(kb.kb_id)}">
             <input type="checkbox" ${defaultsKbs.has(kb.kb_id) ? "checked" : ""}> ${esc(kb.kb_id)}
           </label>`).join("");
-        container.querySelectorAll("label[data-kb]").forEach((label) => {
-          label.addEventListener("click", () => {
+        // 用 input 的 change 事件：label 转发合成点击会令 label.click 触发两次
+        // （toggle 净零），change 每物理点击恰好一次，以原生 checked 为准。
+        container.querySelectorAll("input[type=checkbox]").forEach((input) => {
+          input.addEventListener("change", () => {
+            const label = input.closest("label");
             const kbId = label.dataset.kb;
-            if (defaultsKbs.has(kbId)) defaultsKbs.delete(kbId);
-            else defaultsKbs.add(kbId);
-            label.classList.toggle("checked", defaultsKbs.has(kbId));
+            if (input.checked) defaultsKbs.add(kbId);
+            else defaultsKbs.delete(kbId);
+            label.classList.toggle("checked", input.checked);
           });
         });
       }
@@ -725,12 +728,14 @@
           <label class="${searchKbs.has(kb.kb_id) ? "checked" : ""}" data-kb="${esc(kb.kb_id)}">
             <input type="checkbox" ${searchKbs.has(kb.kb_id) ? "checked" : ""}> ${esc(kb.kb_id)}
           </label>`).join("");
-        container.querySelectorAll("label[data-kb]").forEach((label) => {
-          label.addEventListener("click", () => {
+        // 与默认聚合库一致：监听 input change，避免 label 合成点击双重触发
+        container.querySelectorAll("input[type=checkbox]").forEach((input) => {
+          input.addEventListener("change", () => {
+            const label = input.closest("label");
             const kbId = label.dataset.kb;
-            if (searchKbs.has(kbId)) searchKbs.delete(kbId);
-            else searchKbs.add(kbId);
-            label.classList.toggle("checked", searchKbs.has(kbId));
+            if (input.checked) searchKbs.add(kbId);
+            else searchKbs.delete(kbId);
+            label.classList.toggle("checked", input.checked);
           });
         });
       }

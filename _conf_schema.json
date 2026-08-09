@@ -8,9 +8,8 @@
   "default_kb_ids": {
     "type": "list",
     "default": [],
-    "description": "默认聚合检索知识库集合（rag_search 工具与自动图片检索的目标；在知识库管理页勾选维护，新建自动加入、删除自动移除）",
-    "group": "general",
-    "invisible": true
+    "description": "默认聚合检索知识库集合（rag_search 工具与自动图片检索的目标；知识库管理页勾选维护，新建自动加入、删除自动移除。此处可手动修复：多个 ID 用英文逗号分隔）",
+    "group": "general"
   },
   "qdrant_url": {
     "type": "string",

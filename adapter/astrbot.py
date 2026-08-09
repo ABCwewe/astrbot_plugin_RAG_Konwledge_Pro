@@ -509,11 +509,13 @@ class AstrBotRAGAdapter:
     def get_default_search_kbs(self) -> list[str]:
         """聚合检索集合（rag_search 工具与自动图片检索的目标）。
 
-        存于插件配置 ``default_kb_ids``；由知识库管理页勾选维护，
-        新建自动加入、删除自动移除。
+        存于插件配置 ``default_kb_ids``；知识库管理页勾选维护（新建自动
+        加入、删除自动移除），配置页可手动修复。读取时去重。
         """
         ids = self._cfg.get("default_kb_ids", [])
-        return [kb for kb in ids if isinstance(kb, str) and kb.strip()]
+        return list(
+            dict.fromkeys(kb for kb in ids if isinstance(kb, str) and kb.strip())
+        )
 
     def set_default_search_kbs(self, kb_ids: list[str]) -> list[str]:
         ids = normalize_kb_ids(kb_ids)
