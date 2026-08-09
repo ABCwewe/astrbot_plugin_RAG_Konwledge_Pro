@@ -113,6 +113,19 @@ class RAGPlugin(Star):
             logger.exception("[RAG][LLM] 检索失败")
             return None
 
+    @filter.llm_tool(name="get_message_image")
+    async def get_message_image_tool(self, event: AstrMessageEvent, image_url: str = ""):
+        """获取当前消息或引用消息中图片的本地路径/URL。用户消息带图片（或引用含图片的消息）且需要分析/检索该图片时调用。
+
+        Args:
+            image_url(string): 可选。已知道的图片地址（http/https 直链）；留空则自动从当前消息或被引用消息中提取第一张图片。
+        """
+        try:
+            return await self.adapter.message_image_address(event, image_url)
+        except Exception as exc:
+            logger.exception("[RAG] get_message_image 失败")
+            return None
+
     # ------------------------------------------------------------------
     # Web API（供 WebUI 页面调用）
     # ------------------------------------------------------------------

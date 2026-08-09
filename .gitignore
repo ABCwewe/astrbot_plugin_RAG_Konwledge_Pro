@@ -210,6 +210,9 @@ __marimo__/
 data_test/
 e2e_config.json
 .codegraph/
+剧情总结.md
+APIs.md
+AGENTS.md
 
 # AstrBot 运行时在 cwd 下生成的垃圾数据（standalone import 检查产物）
 /data/
