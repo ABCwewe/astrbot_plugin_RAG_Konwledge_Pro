@@ -50,6 +50,12 @@ class ImageEmbeddingConfig:
     dimension: int | None = None
     #: Also search image vectors on ordinary text queries.
     search_always: bool = False
+    #: Automatically embed incoming message images and inject the retrieved
+    #: context into the LLM request (does not touch native image handling).
+    auto_search: bool = True
+    #: Minimum vector similarity (cosine) for automatic image retrieval;
+    #: 0 disables filtering (noise guard for small knowledge bases).
+    min_score: float = 0.0
     batch_size: int = 8
     concurrency: int = 2
     timeout: float = 60.0
@@ -120,6 +126,8 @@ class RAGConfig:
                     model=im.get("model"),
                     dimension=int(im["dimension"]) if im.get("dimension") else None,
                     search_always=bool(im.get("search_always", False)),
+                    auto_search=bool(im.get("auto_search", True)),
+                    min_score=float(im.get("min_score", 0.0)),
                     batch_size=int(im.get("batch_size", 8)),
                     concurrency=int(im.get("concurrency", 2)),
                     timeout=float(im.get("timeout", 60.0)),
@@ -174,6 +182,8 @@ class RAGConfig:
                 raise ConfigurationError("image.enabled 时需配置 image.api_base/api_key/model")
             if not self.image.dimension:
                 raise ConfigurationError("image.enabled 时需配置 image.dimension")
+            if not (0.0 <= self.image.min_score <= 1.0):
+                raise ConfigurationError("image.min_score 必须在 0~1 之间")
         if self.rerank.enabled and (not self.rerank.api_base or not self.rerank.api_key or not self.rerank.model):
             raise ConfigurationError("rerank.enabled 时需配置 rerank.api_base/api_key/model")
         if self.top_k <= 0 or self.top_n <= 0:

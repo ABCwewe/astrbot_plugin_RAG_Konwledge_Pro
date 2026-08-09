@@ -100,6 +100,26 @@ class RAGPlugin(Star):
     # LLM 工具：让模型在回答时按需检索知识库
     # ------------------------------------------------------------------
 
+    @filter.on_llm_request()
+    async def on_llm_request(self, event: AstrMessageEvent, req):
+        """消息带图时自动注入图片向量检索结果。
+
+        只追加 extra_user_content_parts（单轮生效），完全不触碰
+        req.image_urls / system_prompt —— AstrBot 原生的图像直通
+        （视觉模型）与图像转述（非视觉模型）流程不受影响。
+        """
+        try:
+            context = await self.adapter.auto_image_search_context(event)
+        except Exception as exc:
+            logger.debug("[RAG] 自动图片检索跳过: %s", exc)
+            return
+        if not context:
+            return
+        from astrbot.core.agent.message import TextPart
+
+        req.extra_user_content_parts.append(TextPart(text=context).mark_as_temp())
+        logger.debug("[RAG] 已注入自动图片检索上下文 (%d 字符)", len(context))
+
     @filter.llm_tool(name="rag_search")
     async def rag_search_tool(self, event: AstrMessageEvent, query: str):
         """在增强 RAG 知识库中检索与问题最相关的内容片段，返回带来源标注的上下文。

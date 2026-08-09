@@ -290,6 +290,31 @@ class RAGEngine:
             include_images=include_images,
         )
 
+    async def search_image_by_path(
+        self,
+        kb_id: str,
+        image_path: str | Path,
+        *,
+        top_n: int | None = None,
+    ) -> list[SearchResult]:
+        """Image-as-query retrieval: embed a local image file and search the
+        ``image`` named vector of one KB (no rerank — a text reranker cannot
+        judge images).
+        """
+        from .exceptions import ConfigurationError, IndexNotFoundError
+
+        if not self.config.image.enabled or self._image_embedding is None:
+            raise ConfigurationError("图片检索未启用（image.enabled=false）")
+        collection = await self._manager.active_collection(kb_id)
+        if collection is None:
+            raise IndexNotFoundError(
+                f"知识库 {kb_id} 尚未构建索引，请先导入文档或执行 /rag rebuild"
+            )
+        data = await asyncio.to_thread(Path(image_path).read_bytes)
+        return await self._retriever.retrieve_by_image(
+            collection, data, top_n=top_n
+        )
+
     # -- knowledge base management ----------------------------------------
 
     async def create_kb(self, kb_id: str) -> dict:

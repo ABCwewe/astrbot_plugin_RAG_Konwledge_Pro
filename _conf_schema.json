@@ -148,5 +148,17 @@
     "default": false,
     "description": "普通文本查询是否总是同时检索图片向量",
     "group": "image"
+  },
+  "image_auto_search": {
+    "type": "bool",
+    "default": true,
+    "description": "消息带图时自动对图片做向量检索，并将结果注入 LLM 上下文（不干扰原生图像转述/直通）",
+    "group": "image"
+  },
+  "image_min_score": {
+    "type": "float",
+    "default": 0.0,
+    "description": "自动图片检索的最低相似度阈值（0~1，0 表示不过滤；知识库较小易误命中时建议调高，如 0.3）",
+    "group": "image"
   }
 }

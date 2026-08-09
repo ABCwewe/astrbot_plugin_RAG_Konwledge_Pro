@@ -34,6 +34,7 @@ from .config_utils import (
     mask_config,
     save_search_defaults,
 )
+from .image_utils import find_message_image
 
 logger = logging.getLogger("rag.adapter")
 
@@ -191,6 +192,8 @@ class AstrBotRAGAdapter:
                     "model": cfg.get("image_model"),
                     "dimension": int(cfg["image_dimension"]) if cfg.get("image_dimension") else None,
                     "search_always": bool(cfg.get("image_search_always", False)),
+                    "auto_search": bool(cfg.get("image_auto_search", True)),
+                    "min_score": float(cfg.get("image_min_score", 0.0) or 0.0),
                 },
                 "rerank": {
                     "enabled": bool(cfg.get("rerank_enabled", True)),
@@ -335,6 +338,42 @@ class AstrBotRAGAdapter:
             results = await self.search(self.default_kb, query)
         except RAGError as exc:
             logger.warning("[RAG][LLM] 检索失败: %s", exc)
+            return None
+        if not results:
+            return None
+        return RAGEngine.format_context(results)
+
+    async def auto_image_search_context(self, event) -> str | None:
+        """消息带图时自动图片向量检索，返回注入用上下文。
+
+        - 仅当 image.enabled 且 image.auto_search 时生效
+        - 只读取事件中的图片（正文优先，其次引用消息），不修改事件
+        - 无图 / 检索无结果 / 任何失败都返回 None（静默跳过，绝不干扰
+          AstrBot 原生的图像转述与直通流程）
+        """
+        try:
+            engine = self._require_engine()
+            if not engine.config.image.enabled or not engine.config.image.auto_search:
+                return None
+        except RuntimeError:
+            return None
+        get_messages = getattr(event, "get_messages", None)
+        messages = get_messages() if get_messages else []
+        comp = find_message_image(messages)
+        if comp is None:
+            return None
+        try:
+            converter = getattr(comp, "convert_to_file_path", None)
+            image_path = (
+                await converter() if converter else (comp.url or comp.file or "")
+            )
+            if not image_path:
+                return None
+            results = await engine.search_image_by_path(
+                self.default_kb, image_path, top_n=3
+            )
+        except Exception as exc:
+            logger.debug("[RAG] 自动图片检索跳过: %s", exc)
             return None
         if not results:
             return None

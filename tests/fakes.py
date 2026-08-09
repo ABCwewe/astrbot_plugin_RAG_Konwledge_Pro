@@ -53,7 +53,7 @@ class FakeVectorStore(VectorStore):
         for pid in point_ids:
             coll["points"].pop(pid, None)
 
-    async def search(self, collection, vector_name, query_vector, limit, *, query_filter=None) -> list[ScoredPoint]:
+    async def search(self, collection, vector_name, query_vector, limit, *, query_filter=None, score_threshold=None) -> list[ScoredPoint]:
         coll = self.collections.get(collection)
         if not coll:
             return []
@@ -61,9 +61,10 @@ class FakeVectorStore(VectorStore):
         for pid, p in coll["points"].items():
             if vector_name not in p.vectors:
                 continue
-            scored.append(
-                ScoredPoint(pid, _cosine(query_vector, p.vectors[vector_name]), p.payload)
-            )
+            score = _cosine(query_vector, p.vectors[vector_name])
+            if score_threshold is not None and score < score_threshold:
+                continue
+            scored.append(ScoredPoint(pid, score, p.payload))
         scored.sort(key=lambda s: s.score, reverse=True)
         return scored[:limit]
 

@@ -125,6 +125,7 @@ class QdrantStore(VectorStore):
         limit: int,
         *,
         query_filter: dict | None = None,
+        score_threshold: float | None = None,
     ) -> list[ScoredPoint]:
         try:
             resp = await self._client.query_points(
@@ -135,6 +136,7 @@ class QdrantStore(VectorStore):
                 limit=limit,
                 with_payload=True,
                 with_vectors=False,
+                score_threshold=score_threshold,
             )
         except Exception as exc:
             raise QdrantError(f"检索 {collection} 失败: {exc}") from exc

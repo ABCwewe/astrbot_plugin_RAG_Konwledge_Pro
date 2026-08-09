@@ -55,6 +55,29 @@ class Retriever:
             include_images=include_images,
         )
 
+    async def retrieve_by_image(
+        self,
+        collection: str,
+        image_bytes: bytes,
+        *,
+        top_n: int | None = None,
+    ) -> list[SearchResult]:
+        """Image-as-query retrieval: embed the image and search the ``image``
+        named vector. Used for automatic image search on incoming messages.
+        Hits below ``config.image.min_score`` are dropped (noise guard).
+        """
+        if self._image_embedding is None:
+            return []
+        query_vector = (await self._image_embedding.embed_image([image_bytes]))[0]
+        hits = await self._store.search(
+            collection,
+            "image",
+            query_vector,
+            top_n or self._config.top_n,
+            score_threshold=self._config.image.min_score or None,
+        )
+        return [self._to_result(hit) for hit in hits]
+
     async def retrieve_from_collections(
         self,
         collections: list[str],

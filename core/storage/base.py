@@ -71,8 +71,13 @@ class VectorStore(ABC):
         limit: int,
         *,
         query_filter: dict | None = None,
+        score_threshold: float | None = None,
     ) -> list[ScoredPoint]:
-        """Nearest-neighbour search against one named vector."""
+        """Nearest-neighbour search against one named vector.
+
+        ``score_threshold`` drops hits below the given similarity score
+        (interpretation depends on the distance metric).
+        """
 
     @abstractmethod
     async def count(self, collection: str) -> int:
