@@ -205,3 +205,13 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# RAG plugin local data / secrets
+data_test/
+e2e_config.json
+.codegraph/
+
+# AstrBot 运行时在 cwd 下生成的垃圾数据（standalone import 检查产物）
+/data/
+# 含真实 API Key 的开发文档，不入库
+/APIs.md

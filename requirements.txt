@@ -1,0 +1,4 @@
+qdrant-client>=1.19.0
+httpx>=0.20
+PyMuPDF>=1.24
+Pillow>=10.0
