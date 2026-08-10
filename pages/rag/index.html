@@ -500,7 +500,10 @@
           const data = await bridge.apiGet("progress", { kb_id: modalKb });
           const p = data && data.progress;
           const q = (data && data.queue) || {};
-          const buildActive = p && p.status && p.status !== "idle";
+          // 只把真正进行中的状态视为活跃：READY/FAILED 是终态，若按
+          // status !== "idle" 判定会把轮询循环卡死在活跃分支，导致
+          // awaitingDrain 完成逻辑永远不执行（徽章不翻转/文档不刷新）
+          const buildActive = p && ["CREATING", "BUILDING", "SYNCING"].includes(p.status);
           const queueActive = (q.running || 0) > 0 || (q.queued || 0) > 0 || (q.inbox_pending || 0) > 0;
           if (buildActive || queueActive) {
             const parts = [];
