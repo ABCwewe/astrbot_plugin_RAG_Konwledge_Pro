@@ -1,6 +1,6 @@
 name: astrbot_plugin_RAG_Konwledge_Pro
 display_name: 增强 RAG 知识库
 desc: 独立于 AstrBot 原生知识库的增强 RAG：Qdrant 向量检索 + 在线 Embedding + Reranker，支持自动重建、增量索引、文本与图片检索。
-version: v0.1.0
+version: v0.1.1
 author: AstrBot RAG Team
 repo: ""
