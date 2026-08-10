@@ -506,7 +506,7 @@
             const parts = [];
             if (buildActive) {
               parts.push(
-                `构建: ${p.status} · ${p.processed_documents}/${p.total_documents} 文档 · ${p.processed_chunks} 块` +
+                `索引进度: ${p.status} · ${p.processed_documents}/${p.total_documents} 文档 · ${p.processed_chunks} 块` +
                 (p.error ? " · " + p.error : "")
               );
             }

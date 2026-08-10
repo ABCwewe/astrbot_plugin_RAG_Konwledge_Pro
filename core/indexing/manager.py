@@ -242,21 +242,37 @@ class IndexManager:
         ):
             raise IndexNotFoundError(f"知识库 {kb_id} 没有可用的 READY 索引")
 
-        async with self._limiter:
-            doc_paths = self._list_docs(kb_id)
-            documents = await store.load_documents()
-            indexer = self._make_indexer()
-            stats = await indexer.sync_documents(
-                manifest.collection_name,
-                kb_id,
-                self._docs_dir(kb_id),
-                doc_paths,
-                documents,
-            )
-            await store.save_documents(documents)
-            manifest.document_count = len(documents)
-            manifest.chunk_count = stats.chunks_written
-            await store.save_manifest(manifest)
+        # 增量同步同样上报逐文档进度（与重建一致），WebUI 可实时看到
+        # "索引进度: SYNCING · k/N 文档"。
+        progress = self._progress_for(kb_id)
+        progress.status = "SYNCING"
+        progress.error = None
+        progress.processed_documents = 0
+        progress.total_documents = 0
+        progress.processed_chunks = 0
+        _touch(progress)
+        try:
+            async with self._limiter:
+                doc_paths = self._list_docs(kb_id)
+                documents = await store.load_documents()
+                indexer = self._make_indexer()
+                stats = await indexer.sync_documents(
+                    manifest.collection_name,
+                    kb_id,
+                    self._docs_dir(kb_id),
+                    doc_paths,
+                    documents,
+                    progress=lambda done, total, chunks: (
+                        self._tick_progress(kb_id, done, total, chunks)
+                    ),
+                )
+                await store.save_documents(documents)
+                manifest.document_count = len(documents)
+                manifest.chunk_count = stats.chunks_written
+                await store.save_manifest(manifest)
+        finally:
+            progress.status = "idle"
+            _touch(progress)
         logger.info(
             "[INDEX] 增量同步完成 (kb=%s): added=%d updated=%d unchanged=%d deleted=%d",
             kb_id,
