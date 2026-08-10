@@ -179,10 +179,9 @@
         <input type="text" id="query" placeholder="输入问题，跨知识库检索…" style="flex:1">
         <label>保留数量</label>
         <input type="number" id="top-n" min="1" max="30" value="6" style="width:80px">
-        <button class="primary" id="btn-search">检索</button>
+        <button class="primary" id="btn-search">文本检索</button>
       </div>
       <div id="search-status" class="status"></div>
-      <div id="results"></div>
     </div>
     <div class="card">
       <h2>图片检索测试（以图搜库）</h2>
@@ -190,12 +189,16 @@
         拖拽图片到此处，或点击选择
       </div>
       <input type="file" id="img-query" accept="image/*" style="display:none">
+      <div id="img-preview" style="display:none; margin-top:10px"></div>
       <div class="row" style="margin-top:10px">
         <button class="primary" id="btn-search-image">图片检索</button>
       </div>
       <div class="meta" style="margin-top:6px">对选中的知识库做图片向量检索，返回最相似的图片/图文块；无图片向量的库自动跳过。</div>
       <div id="img-query-status" class="status"></div>
-      <div id="img-results"></div>
+    </div>
+    <div class="card">
+      <h2>检索结果</h2>
+      <div id="search-results" class="status">（暂无结果，执行文本或图片检索后显示）</div>
     </div>
   </div>
 
@@ -327,10 +330,21 @@
 
       // ---------- 子页切换 ----------
       document.querySelectorAll(".tab-btn").forEach((btn) => {
-        btn.addEventListener("click", () => {
+        btn.addEventListener("click", async () => {
           document.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("active", b === btn));
           document.querySelectorAll(".panel").forEach((p) => p.classList.toggle("active", p.id === "panel-" + btn.dataset.tab));
-          if (btn.dataset.tab === "search") applyDefaultsToSearch();
+          // 每次进入子页刷新对应数据，避免需要手动刷新浏览器
+          const tab = btn.dataset.tab;
+          if (tab === "kb") {
+            refreshKbs();
+            loadDefaults();
+          } else if (tab === "search") {
+            await refreshKbs();
+            await loadDefaults();
+            applyDefaultsToSearch();
+          } else if (tab === "config") {
+            loadConfig();
+          }
         });
       });
 
@@ -505,6 +519,11 @@
               parts.push(
                 `索引队列: 待索引 ${q.inbox_pending || 0}${perKb ? "（" + perKb + "）" : ""} · 运行 ${q.running || 0} · 等待 ${q.queued || 0} · 完成 ${q.completed || 0}（并发上限 ${q.max_concurrent || "-"}）`
               );
+              // 上传完成后等待排空期间：显示文档级进度（已索引 m/n）
+              if (awaitingDrain) {
+                const done = await uploadedIndexedCount();
+                if (done !== null) parts.push(`已索引 ${done}/${uploadedCount()} 文档`);
+              }
             }
             $("modal-progress").style.display = "block";
             $("modal-progress").textContent = parts.join("；");
@@ -512,9 +531,10 @@
           } else {
             $("modal-progress").style.display = "none";
             progressPollActive = false;
-            // 上传全部完成后队列排空 → 刷新文档列表与知识库统计
+            // 上传全部完成后队列排空 → 徽章翻转为"已索引" + 刷新文档/统计
             if (awaitingDrain) {
               awaitingDrain = false;
+              markUploadedAsIndexed();
               setStatus("upload-status", "全部文件已上传并完成索引", true);
               loadKbModal();
               refreshKbs();
@@ -527,9 +547,37 @@
 
       // ---------- 上传（待传列表 → 快速上传 → 后端动态队列索引） ----------
       const UPLOAD_BATCH = 3;  // 每批并发上传请求数（上传不等待索引）
-      let pendingFiles = [];   // [{file, status: pending|uploading|uploaded|error, error}]
+      let pendingFiles = [];   // [{file, status: pending|uploading|uploaded|indexed|error, error}]
       let uploadBusy = false;
       let awaitingDrain = false;  // 上传已全部完成，等待索引队列排空
+
+      function uploadedCount() {
+        return pendingFiles.filter((p) => p.status === "uploaded" || p.status === "indexed").length;
+      }
+
+      function markUploadedAsIndexed() {
+        let changed = false;
+        pendingFiles.forEach((p) => {
+          if (p.status === "uploaded") { p.status = "indexed"; changed = true; }
+        });
+        if (changed) renderPendingList();
+      }
+
+      async function uploadedIndexedCount() {
+        // 文档列表中已索引的已上传文件数（驱动"已索引 m/n"进度）
+        try {
+          const data = await bridge.apiGet("kb/documents", { kb_id: modalKb });
+          const docs = data.documents || [];
+          const names = new Set(
+            pendingFiles
+              .filter((p) => p.status === "uploaded" || p.status === "indexed")
+              .map((p) => p.file.name)
+          );
+          return docs.filter((d) => names.has(d.filename) && d.indexed).length;
+        } catch (e) {
+          return null;
+        }
+      }
 
       function addPendingFiles(files) {
         const list = Array.from(files || []);
@@ -555,8 +603,10 @@
             const chip = p.status === "pending" ? "待上传"
               : p.status === "uploading" ? "上传中…"
               : p.status === "uploaded" ? "已上传（排队索引）"
+              : p.status === "indexed" ? "已索引"
               : "失败";
-            const chipCls = p.status === "uploaded" ? "badge ok"
+            const chipCls = p.status === "indexed" ? "badge ok"
+              : p.status === "uploaded" ? "badge warn"
               : p.status === "error" ? "badge err" : "badge warn";
             const removeBtn = (p.status === "pending" || p.status === "error")
               ? `<button class="danger" data-remove="${i}" title="${esc(p.error || "移除")}">移除</button>` : "";
@@ -750,6 +800,10 @@
       }
 
       function renderResults(containerId, results) {
+        if (!results || !results.length) {
+          $(containerId).innerHTML = '<div class="meta">（无结果）</div>';
+          return;
+        }
         $(containerId).innerHTML = results.map((r) => {
           const source = (r.metadata && r.metadata.source) || r.document_id;
           const page = r.metadata && r.metadata.page;
@@ -774,13 +828,29 @@
         });
       }
 
-      let droppedImgFile = null;  // 拖拽选择的图片（input change 时清空）
+      let droppedImgFile = null;   // 当前选中的检索图片（拖拽或选择）
+      let imgPreviewUrl = null;
+
+      function selectImgFile(file) {
+        droppedImgFile = file;
+        if (imgPreviewUrl) URL.revokeObjectURL(imgPreviewUrl);
+        imgPreviewUrl = URL.createObjectURL(file);
+        const box = $("img-preview");
+        box.style.display = "block";
+        box.innerHTML =
+          `<img src="${imgPreviewUrl}" style="max-width:160px;max-height:120px;border-radius:6px;border:1px solid var(--border);vertical-align:middle">` +
+          `<span style="margin-left:10px;color:var(--text)">${esc(file.name)}</span>` +
+          `<span class="badge ok" style="margin-left:8px">已就绪，点击图片检索</span>`;
+        setStatus("img-query-status", "", true);
+      }
 
       function setupImageDropzone() {
         const zone = $("img-dropzone");
         const input = $("img-query");
         zone.addEventListener("click", () => input.click());
-        input.addEventListener("change", () => { droppedImgFile = null; });
+        input.addEventListener("change", () => {
+          if (input.files && input.files[0]) selectImgFile(input.files[0]);
+        });
         ["dragenter", "dragover"].forEach((evt) => {
           zone.addEventListener(evt, (e) => { e.preventDefault(); zone.classList.add("dragover"); });
         });
@@ -789,8 +859,7 @@
         });
         zone.addEventListener("drop", (e) => {
           if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) {
-            droppedImgFile = e.dataTransfer.files[0];
-            setStatus("img-query-status", `已选择图片: ${droppedImgFile.name}`, true);
+            selectImgFile(e.dataTransfer.files[0]);
           }
         });
       }
@@ -802,7 +871,7 @@
         if (!kbIds.length) { setStatus("img-query-status", "请先选择至少一个知识库", false); return; }
         const topN = Math.max(1, Math.min(30, Number($("top-n").value) || 6));
         setStatus("img-query-status", `图片检索中（${file.name}）…`);
-        $("img-results").innerHTML = "";
+        $("search-results").innerHTML = "检索中…";
         try {
           const imageBase64 = await readFileAsBase64(file);
           const data = await bridge.apiPost("search/image", {
@@ -811,9 +880,9 @@
             top_n: topN,
           });
           const results = data.results || [];
-          if (!results.length) { setStatus("img-query-status", "未检索到相似图片。", false); return; }
+          if (!results.length) { setStatus("img-query-status", "未检索到相似图片。", false); renderResults("search-results", []); return; }
           setStatus("img-query-status", `图片检索到 ${results.length} 条：`, true);
-          renderResults("img-results", results);
+          renderResults("search-results", results);
         } catch (e) {
           setStatus("img-query-status", "图片检索失败: " + e, false);
         }
@@ -826,13 +895,13 @@
         if (!kbIds.length) { setStatus("search-status", "请先选择至少一个知识库", false); return; }
         const topN = Math.max(1, Math.min(30, Number($("top-n").value) || 6));
         setStatus("search-status", "检索中…");
-        $("results").innerHTML = "";
+        $("search-results").innerHTML = "检索中…";
         try {
           const data = await bridge.apiGet("search", { kb_ids: kbIds.join(","), q, top_n: topN });
           const results = data.results || [];
-          if (!results.length) { setStatus("search-status", "未检索到相关内容。", false); return; }
+          if (!results.length) { setStatus("search-status", "未检索到相关内容。", false); renderResults("search-results", []); return; }
           setStatus("search-status", `跨 ${kbIds.length} 个知识库检索到 ${results.length} 条：`, true);
-          renderResults("results", results);
+          renderResults("search-results", results);
         } catch (e) {
           setStatus("search-status", "检索失败: " + e, false);
         }
