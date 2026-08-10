@@ -130,6 +130,7 @@ class IndexManager:
         image_embedding: EmbeddingProvider | None = None,
         parsers: ParserRegistry | None = None,
         ingest_concurrency: int = 2,
+        image_max_side: int = 0,
     ) -> None:
         self._store = store
         self._embedding = embedding
@@ -138,6 +139,7 @@ class IndexManager:
         self._cache = cache
         self._parsers = parsers or ParserRegistry()
         self._data_root = Path(data_root)
+        self._image_max_side = image_max_side
         self._locks: dict[str, asyncio.Lock] = {}
         self._progress: dict[str, BuildProgress] = {}
         self._limiter = _IndexLimiter(ingest_concurrency)
@@ -175,6 +177,7 @@ class IndexManager:
             self._cache,
             parsers=self._parsers,
             image_embedding=self._image_embedding,
+            image_max_side=self._image_max_side,
         )
 
     # -- progress ---------------------------------------------------------

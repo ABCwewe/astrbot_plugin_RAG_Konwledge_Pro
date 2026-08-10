@@ -193,6 +193,7 @@ class AstrBotRAGAdapter:
                     "search_always": bool(cfg.get("image_search_always", False)),
                     "auto_search": bool(cfg.get("image_auto_search", True)),
                     "min_score": float(cfg.get("image_min_score", 0.0) or 0.0),
+                    "max_side": int(cfg.get("image_max_side", 1024)),
                 },
                 "rerank": {
                     "enabled": bool(cfg.get("rerank_enabled", True)),

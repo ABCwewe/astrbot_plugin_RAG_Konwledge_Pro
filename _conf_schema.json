@@ -178,5 +178,11 @@
     "default": 0.0,
     "description": "自动图片检索的最低相似度阈值（0~1，0 表示不过滤；知识库较小易误命中时建议调高，如 0.3）",
     "group": "image"
+  },
+  "image_max_side": {
+    "type": "int",
+    "default": 1024,
+    "description": "图片统一缩放的最大边长（索引与查询两侧一致，0 表示不缩放；缩小可加速 Embedding 并降低传输，修改后需重建索引）",
+    "group": "image"
   }
 }

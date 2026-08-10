@@ -15,9 +15,11 @@ score them (AGENTS.md §26).
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from ..config import RAGConfig
+from ..imaging import normalize_image_bytes
 from ..models import SearchResult
 from ..providers import EmbeddingProvider, RerankerProvider
 from ..storage.base import ScoredPoint, VectorStore
@@ -65,9 +67,16 @@ class Retriever:
         """Image-as-query retrieval: embed the image and search the ``image``
         named vector. Used for automatic image search on incoming messages.
         Hits below ``config.image.min_score`` are dropped (noise guard).
+
+        The query image is normalized with the same rule as index-time images
+        (``image.max_side``), so query and index vectors stay in one space.
         """
         if self._image_embedding is None:
             return []
+        if self._config.image.max_side > 0:
+            image_bytes = await asyncio.to_thread(
+                normalize_image_bytes, image_bytes, self._config.image.max_side
+            )
         query_vector = (await self._image_embedding.embed_image([image_bytes]))[0]
         hits = await self._store.search(
             collection,

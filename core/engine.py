@@ -106,6 +106,7 @@ class RAGEngine:
             self._data_root,
             image_embedding=self._image_embedding,
             ingest_concurrency=config.ingest_concurrency,
+            image_max_side=config.image.max_side,
         )
         self._retriever = Retriever(
             self._store,
