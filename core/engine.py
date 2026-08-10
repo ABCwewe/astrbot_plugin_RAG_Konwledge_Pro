@@ -281,7 +281,15 @@ class RAGEngine:
             logger.info("[RAG] 波次目标知识库已删除，丢弃文件 (kb=%s)", kb_id)
 
     def get_upload_stats(self) -> dict:
-        """动态队列状态：收件箱待索引数 + 索引限流统计。"""
+        """动态队列状态：收件箱待索引数 + 索引限流统计。
+
+        附带工人自愈：若后台工人意外退出（异常终止），在此重启。
+        """
+        if self._worker_task.done() and not self._worker_task.cancelled():
+            logger.warning("[RAG] 上传工人意外退出，重启")
+            self._worker_task = asyncio.create_task(
+                self._upload_worker(), name="rag-upload-worker"
+            )
         pending = 0
         by_kb: dict[str, int] = {}
         kbs_dir = self._data_root / "kbs"

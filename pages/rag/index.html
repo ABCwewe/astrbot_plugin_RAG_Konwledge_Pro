@@ -493,9 +493,18 @@
       });
 
       let progressPollActive = false;
+      let progressPollDeadline = 0;   // 僵尸保护：卡死超时后强制重置
       async function pollModalProgress() {
-        if (!modalKb || progressPollActive) return;
+        if (!modalKb) return;
+        if (progressPollActive) {
+          if (Date.now() > progressPollDeadline) {
+            progressPollActive = false;  // 上一轮卡死（await 悬挂），强制接管
+          } else {
+            return;
+          }
+        }
         progressPollActive = true;
+        progressPollDeadline = Date.now() + 10000;
         try {
           const data = await bridge.apiGet("progress", { kb_id: modalKb });
           const p = data && data.progress;
@@ -505,7 +514,7 @@
           // awaitingDrain 完成逻辑永远不执行（徽章不翻转/文档不刷新）
           const buildActive = p && ["CREATING", "BUILDING", "SYNCING"].includes(p.status);
           const queueActive = (q.running || 0) > 0 || (q.queued || 0) > 0 || (q.inbox_pending || 0) > 0;
-          if (buildActive || queueActive) {
+          if (buildActive || queueActive || awaitingDrain) {
             const parts = [];
             if (buildActive) {
               parts.push(
@@ -513,7 +522,7 @@
                 (p.error ? " · " + p.error : "")
               );
             }
-            if (queueActive) {
+            if (queueActive || awaitingDrain) {
               const inbox = q.inbox_by_kb || {};
               const perKb = Object.entries(inbox)
                 .filter(([, n]) => n > 0)
@@ -530,21 +539,41 @@
             }
             $("modal-progress").style.display = "block";
             $("modal-progress").textContent = parts.join("；");
+            progressPollDeadline = Date.now() + 10000;
             setTimeout(pollModalProgress, 1500);
           } else {
             $("modal-progress").style.display = "none";
             progressPollActive = false;
-            // 上传全部完成后队列排空 → 徽章翻转为"已索引" + 刷新文档/统计
-            if (awaitingDrain) {
+            // 完成逻辑由 waitForDrain() 负责（awaitingDrain 已被其置 false）
+          }
+        } catch (e) {
+          progressPollActive = false; /* 轮询出错，下次调用重试 */
+        }
+      }
+
+      // 上传完成后的独立排空等待器：不依赖轮询循环（防僵尸循环导致
+      // 完成逻辑永远不执行），队列排空即翻转徽章并刷新文档/统计。
+      async function waitForDrain() {
+        while (awaitingDrain) {
+          await new Promise((resolve) => setTimeout(resolve, 1500));
+          try {
+            const data = await bridge.apiGet("progress", { kb_id: modalKb });
+            const p = data && data.progress;
+            const q = (data && data.queue) || {};
+            const busy =
+              (p && ["CREATING", "BUILDING", "SYNCING"].includes(p.status)) ||
+              (q.running || 0) > 0 ||
+              (q.queued || 0) > 0 ||
+              (q.inbox_pending || 0) > 0;
+            if (!busy) {
               awaitingDrain = false;
               markUploadedAsIndexed();
               setStatus("upload-status", "全部文件已上传并完成索引", true);
               loadKbModal();
               refreshKbs();
+              return;
             }
-          }
-        } catch (e) {
-          progressPollActive = false; /* ignore transient polling errors */
+          } catch (e) { /* 瞬态错误继续重试 */ }
         }
       }
 
@@ -662,6 +691,8 @@
         awaitingDrain = true;
         renderPendingList();
         setStatus("upload-status", `上传完成 ${ok}/${queue.length} 个，后端排队索引中（见下方队列状态）…`, true);
+        // 独立排空等待器（不依赖轮询循环），保证完成后徽章翻转与刷新
+        waitForDrain();
         pollModalProgress();
       }
       $("btn-upload").addEventListener("click", startUpload);
