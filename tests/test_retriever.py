@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from core.config import RAGConfig
 from core.retrieval import Retriever
+from core.storage.base import VectorPoint
 
 from tests.fakes import FakeEmbedding, FakeReranker, FakeVectorStore
 
@@ -141,3 +142,67 @@ async def test_empty_query_and_empty_results():
     store2 = FakeVectorStore()
     await store2.create_collection("empty", {"text": 8})
     assert await retriever.retrieve("empty", "没有内容的库") == []
+
+
+async def _seed_quota(store: FakeVectorStore, emb: FakeEmbedding) -> None:
+    await store.create_collection("kbA", {"text": 8})
+    await store.create_collection("kbB", {"text": 8})
+    for i in range(3):  # kbA 与查询高度相似
+        await store.upsert(
+            "kbA",
+            [VectorPoint(
+                id=f"a{i}",
+                vectors={"text": emb._vec("今州岁主的传说" + "x" * i)},
+                payload={"chunk_id": f"a{i}", "document_id": "d", "kb_id": "kbA",
+                         "type": "text", "content": f"今州岁主的传说{i}", "source": "a.md"},
+            )],
+        )
+    for i in range(2):  # kbB 与查询低相似（旧逻辑会被向量截断掉）
+        await store.upsert(
+            "kbB",
+            [VectorPoint(
+                id=f"b{i}",
+                vectors={"text": emb._vec("黑海岸守岸人的故事")},
+                payload={"chunk_id": f"b{i}", "document_id": "e", "kb_id": "kbB",
+                         "type": "text", "content": f"黑海岸守岸人{i}", "source": "b.md"},
+            )],
+        )
+
+
+async def test_multi_collection_per_kb_quota_enters_rerank():
+    store = FakeVectorStore()
+    emb = FakeEmbedding()
+    await _seed_quota(store, emb)
+    reranker = FakeReranker()
+    retriever = Retriever(
+        store, emb, reranker, _config(top_k=2, top_n=2, rerank_pool_size=10)
+    )
+    await retriever.retrieve_from_collections(["kbA", "kbB"], "今州岁主")
+    pool_docs = reranker.calls[0][1]
+    # 每库贡献 top_k=2 → 4 条进 rerank；旧逻辑只保留全局向量前 2 条（kbB 被裁掉）
+    assert len(pool_docs) == 4
+    assert any("黑海岸" in d for d in pool_docs)
+
+
+async def test_rerank_pool_size_caps_total():
+    store = FakeVectorStore()
+    emb = FakeEmbedding()
+    for kb in ("k1", "k2", "k3"):
+        await store.create_collection(kb, {"text": 8})
+        for i in range(3):
+            await store.upsert(
+                kb,
+                [VectorPoint(
+                    id=f"{kb}{i}",
+                    vectors={"text": emb._vec(f"内容{kb}{i}")},
+                    payload={"chunk_id": f"{kb}{i}", "document_id": kb, "kb_id": kb,
+                             "type": "text", "content": f"内容{kb}{i}", "source": f"{kb}.md"},
+                )],
+            )
+    reranker = FakeReranker()
+    retriever = Retriever(
+        store, emb, reranker, _config(top_k=3, top_n=3, rerank_pool_size=5)
+    )
+    await retriever.retrieve_from_collections(["k1", "k2", "k3"], "内容")
+    # 每库 3 条共 9 条，但总池被 rerank_pool_size=5 截断
+    assert len(reranker.calls[0][1]) == 5

@@ -56,6 +56,9 @@ class ImageEmbeddingConfig:
     #: Minimum vector similarity (cosine) for automatic image retrieval;
     #: 0 disables filtering (noise guard for small knowledge bases).
     min_score: float = 0.0
+    #: Normalize images (index + query) so the longest side <= this value
+    #: (BOX downscale, deterministic). 0 disables normalization.
+    max_side: int = 1024
     batch_size: int = 8
     concurrency: int = 2
     timeout: float = 60.0
@@ -88,6 +91,9 @@ class RAGConfig:
     chunking: ChunkingConfig = field(default_factory=ChunkingConfig)
     top_k: int = 30
     top_n: int = 6
+    #: Rerank candidate-pool cap. In multi-KB aggregation every KB contributes
+    #: up to ``top_k`` candidates, but the merged pool never exceeds this.
+    rerank_pool_size: int = 60
     kb_id: str = "default"
     #: Max concurrent index operations (rebuild/incremental sync) across the
     #: engine. Multiple uploads are queued server-side beyond this limit.
@@ -131,6 +137,7 @@ class RAGConfig:
                     search_always=bool(im.get("search_always", False)),
                     auto_search=bool(im.get("auto_search", True)),
                     min_score=float(im.get("min_score", 0.0)),
+                    max_side=int(im.get("max_side", 1024)),
                     batch_size=int(im.get("batch_size", 8)),
                     concurrency=int(im.get("concurrency", 2)),
                     timeout=float(im.get("timeout", 60.0)),
@@ -151,6 +158,7 @@ class RAGConfig:
                 ),
                 top_k=int(data.get("top_k", 30)),
                 top_n=int(data.get("top_n", 6)),
+                rerank_pool_size=int(data.get("rerank_pool_size", 60)),
                 kb_id=str(data.get("kb_id", "default")),
                 ingest_concurrency=int(data.get("ingest_concurrency", 2)),
             )
@@ -188,10 +196,14 @@ class RAGConfig:
                 raise ConfigurationError("image.enabled 时需配置 image.dimension")
             if not (0.0 <= self.image.min_score <= 1.0):
                 raise ConfigurationError("image.min_score 必须在 0~1 之间")
+            if self.image.max_side < 0:
+                raise ConfigurationError("image.max_side 不能为负")
         if self.rerank.enabled and (not self.rerank.api_base or not self.rerank.api_key or not self.rerank.model):
             raise ConfigurationError("rerank.enabled 时需配置 rerank.api_base/api_key/model")
         if self.top_k <= 0 or self.top_n <= 0:
             raise ConfigurationError("top_k/top_n 必须大于 0")
+        if self.rerank_pool_size < self.top_n:
+            raise ConfigurationError("rerank_pool_size 不能小于 top_n")
         if self.ingest_concurrency <= 0:
             raise ConfigurationError("ingest_concurrency 必须大于 0")
 
@@ -210,6 +222,7 @@ class RAGConfig:
             "image_provider": self.image.provider if self.image.enabled else None,
             "image_model": self.image.model if self.image.enabled else None,
             "image_dimension": self.image.dimension if self.image.enabled else None,
+            "image_max_side": self.image.max_side if self.image.enabled else None,
             "chunk_separator": self.chunking.separator,
             "chunk_size": self.chunking.chunk_size,
             "chunk_overlap": self.chunking.chunk_overlap,

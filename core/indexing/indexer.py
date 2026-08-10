@@ -8,6 +8,7 @@ embedding cache makes rebuilds and re-imports cheap (AGENTS.md §22-§23).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from dataclasses import dataclass, field
@@ -15,6 +16,7 @@ from pathlib import Path
 from typing import Callable
 
 from ..chunking import TextChunker
+from ..imaging import normalize_image_bytes
 from ..models import Chunk
 from ..parsers import ParserRegistry
 from ..providers import EmbeddingProvider
@@ -59,6 +61,7 @@ class Indexer:
         cache: EmbeddingCache,
         parsers: ParserRegistry | None = None,
         image_embedding: EmbeddingProvider | None = None,
+        image_max_side: int = 0,
     ) -> None:
         self._store = store
         self._embedding = embedding
@@ -66,6 +69,7 @@ class Indexer:
         self._chunker = chunker
         self._cache = cache
         self._parsers = parsers or ParserRegistry()
+        self._image_max_side = image_max_side
 
     # -- public API -------------------------------------------------------
 
@@ -301,7 +305,14 @@ class Indexer:
         model = self._image_embedding.model_name
         payloads: list[bytes] = []
         for c in chunks:
-            payloads.append(await _read_bytes(c.image_path))
+            raw = await _read_bytes(c.image_path)
+            # 与查询侧一致的统一规范化：缩放/重编码后的字节才是缓存键与
+            # 嵌入输入，保证索引/查询向量空间一致且缓存可用。
+            payloads.append(
+                await asyncio.to_thread(
+                    normalize_image_bytes, raw, self._image_max_side
+                )
+            )
         hashes = [EmbeddingCache.content_hash_of_bytes(p) for p in payloads]
         hits = await self._cache.get_many("image", model, hashes)
         missing_idx = [i for i, v in enumerate(hits) if v is None]

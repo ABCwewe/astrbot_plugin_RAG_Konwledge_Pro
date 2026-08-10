@@ -101,6 +101,12 @@
     "description": "最终返回数 Top-N",
     "group": "retrieval"
   },
+  "rerank_pool_size": {
+    "type": "int",
+    "default": 60,
+    "description": "重排序候选池上限。多库聚合检索时每个库贡献 top_k 条进候选池，总池不超过此值（防止候选过多导致 Rerank 调用过大）",
+    "group": "retrieval"
+  },
   "ingest_concurrency": {
     "type": "int",
     "default": 2,
@@ -171,6 +177,12 @@
     "type": "float",
     "default": 0.0,
     "description": "自动图片检索的最低相似度阈值（0~1，0 表示不过滤；知识库较小易误命中时建议调高，如 0.3）",
+    "group": "image"
+  },
+  "image_max_side": {
+    "type": "int",
+    "default": 1024,
+    "description": "图片统一缩放的最大边长（索引与查询两侧一致，0 表示不缩放；缩小可加速 Embedding 并降低传输，修改后需重建索引）",
     "group": "image"
   }
 }

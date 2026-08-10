@@ -15,9 +15,11 @@ score them (AGENTS.md §26).
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from ..config import RAGConfig
+from ..imaging import normalize_image_bytes
 from ..models import SearchResult
 from ..providers import EmbeddingProvider, RerankerProvider
 from ..storage.base import ScoredPoint, VectorStore
@@ -65,9 +67,16 @@ class Retriever:
         """Image-as-query retrieval: embed the image and search the ``image``
         named vector. Used for automatic image search on incoming messages.
         Hits below ``config.image.min_score`` are dropped (noise guard).
+
+        The query image is normalized with the same rule as index-time images
+        (``image.max_side``), so query and index vectors stay in one space.
         """
         if self._image_embedding is None:
             return []
+        if self._config.image.max_side > 0:
+            image_bytes = await asyncio.to_thread(
+                normalize_image_bytes, image_bytes, self._config.image.max_side
+            )
         query_vector = (await self._image_embedding.embed_image([image_bytes]))[0]
         hits = await self._store.search(
             collection,
@@ -88,11 +97,17 @@ class Retriever:
         include_images: bool | None = None,
     ) -> list[SearchResult]:
         """Retrieve across several collections; results are aggregated by
-        match score (vector score → one rerank pass → Top-N)."""
+        match score (vector Top-K per KB → merged → one rerank → Top-N).
+
+        Every collection contributes up to ``top_k`` candidates to the rerank
+        pool (per-KB quota, so no KB is starved out by vector score); the
+        merged pool is capped by ``rerank_pool_size``.
+        """
         if not collections or not query or not query.strip():
             return []
         top_k = top_k or self._config.top_k
         top_n = top_n or self._config.top_n
+        pool_cap = self._config.rerank_pool_size
         if include_images is None:
             include_images = bool(
                 self._config.image.enabled and self._config.image.search_always
@@ -100,15 +115,23 @@ class Retriever:
 
         query_vector = (await self._embedding.embed_text([query], input_type="query"))[0]
 
-        results: list[SearchResult] = []
+        merged: list[SearchResult] = []
+        seen: set[str] = set()
         for collection in collections:
+            per_kb: list[SearchResult] = []
             text_hits = await self._store.search(collection, "text", query_vector, top_k)
-            results.extend(self._to_result(hit) for hit in text_hits)
+            per_kb.extend(self._to_result(hit) for hit in text_hits)
             if include_images and self._image_embedding is not None:
                 image_hits = await self._store.search(collection, "image", query_vector, top_k)
-                results.extend(self._to_result(hit) for hit in image_hits)
-
-        results = _dedupe_and_sort(results, top_k)
+                per_kb.extend(self._to_result(hit) for hit in image_hits)
+            for result in _dedupe_and_sort(per_kb, top_k):
+                if result.chunk_id in seen:
+                    continue
+                seen.add(result.chunk_id)
+                merged.append(result)
+            if len(merged) >= pool_cap:
+                break
+        results = merged[:pool_cap]
         if not results:
             return []
 
