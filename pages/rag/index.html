@@ -153,6 +153,7 @@
         <button class="primary" id="btn-kb-create">新建知识库</button>
         <button id="btn-kb-refresh">刷新列表</button>
       </div>
+      <div id="kb-op-status" class="status"></div>
       <div id="kb-list" class="kb-list status">加载中…</div>
     </div>
 
@@ -185,12 +186,16 @@
     </div>
     <div class="card">
       <h2>图片检索测试（以图搜库）</h2>
-      <div class="row">
-        <input type="file" id="img-query" accept="image/*" style="flex:1">
+      <div class="dropzone" id="img-dropzone">
+        拖拽图片到此处，或点击选择
+      </div>
+      <input type="file" id="img-query" accept="image/*" style="display:none">
+      <div class="row" style="margin-top:10px">
         <button class="primary" id="btn-search-image">图片检索</button>
       </div>
       <div class="meta" style="margin-top:6px">对选中的知识库做图片向量检索，返回最相似的图片/图文块；无图片向量的库自动跳过。</div>
       <div id="img-query-status" class="status"></div>
+      <div id="img-results"></div>
     </div>
   </div>
 
@@ -365,10 +370,12 @@
 
       async function createKb() {
         const kbId = $("new-kb").value.trim();
-        if (!kbId) { setStatus("kb-list", "请输入知识库 ID", false); return; }
+        // 输入为空时按钮已禁用，这里仅作兜底；错误提示写入独立状态区，
+        // 绝不侵占知识库列表
+        if (!kbId) { setStatus("kb-op-status", "请输入知识库 ID", false); return; }
         try {
           await bridge.apiPost("kb/create", { kb_id: kbId });
-          setStatus("kb-list", `已创建知识库「${kbId}」`, true);
+          setStatus("kb-op-status", `已创建知识库「${kbId}」`, true);
           $("new-kb").value = "";
           // 新建后自动选中该库（上传目标与列表高亮）
           selectedKb = kbId;
@@ -376,7 +383,7 @@
           refreshKbs();
           loadDefaults();
         } catch (e) {
-          setStatus("kb-list", "创建失败: " + e, false);
+          setStatus("kb-op-status", "创建失败: " + e, false);
         }
       }
 
@@ -595,6 +602,8 @@
             }
           }));
           renderPendingList();
+          // 每批上传后立即刷新一次队列状态，让索引进度随上传同步显示
+          pollModalProgress();
         }
         uploadBusy = false;
         awaitingDrain = true;
@@ -740,8 +749,8 @@
         });
       }
 
-      function renderResults(results) {
-        $("results").innerHTML = results.map((r) => {
+      function renderResults(containerId, results) {
+        $(containerId).innerHTML = results.map((r) => {
           const source = (r.metadata && r.metadata.source) || r.document_id;
           const page = r.metadata && r.metadata.page;
           const kbId = (r.metadata && r.metadata.kb_id) || "";
@@ -765,14 +774,35 @@
         });
       }
 
+      let droppedImgFile = null;  // 拖拽选择的图片（input change 时清空）
+
+      function setupImageDropzone() {
+        const zone = $("img-dropzone");
+        const input = $("img-query");
+        zone.addEventListener("click", () => input.click());
+        input.addEventListener("change", () => { droppedImgFile = null; });
+        ["dragenter", "dragover"].forEach((evt) => {
+          zone.addEventListener(evt, (e) => { e.preventDefault(); zone.classList.add("dragover"); });
+        });
+        ["dragleave", "drop"].forEach((evt) => {
+          zone.addEventListener(evt, (e) => { e.preventDefault(); zone.classList.remove("dragover"); });
+        });
+        zone.addEventListener("drop", (e) => {
+          if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) {
+            droppedImgFile = e.dataTransfer.files[0];
+            setStatus("img-query-status", `已选择图片: ${droppedImgFile.name}`, true);
+          }
+        });
+      }
+
       async function searchImage() {
-        const file = $("img-query").files[0];
-        if (!file) { setStatus("img-query-status", "请先选择一张图片", false); return; }
+        const file = droppedImgFile || $("img-query").files[0];
+        if (!file) { setStatus("img-query-status", "请先选择或拖拽一张图片", false); return; }
         const kbIds = Array.from(searchKbs);
         if (!kbIds.length) { setStatus("img-query-status", "请先选择至少一个知识库", false); return; }
         const topN = Math.max(1, Math.min(30, Number($("top-n").value) || 6));
         setStatus("img-query-status", `图片检索中（${file.name}）…`);
-        $("results").innerHTML = "";
+        $("img-results").innerHTML = "";
         try {
           const imageBase64 = await readFileAsBase64(file);
           const data = await bridge.apiPost("search/image", {
@@ -783,7 +813,7 @@
           const results = data.results || [];
           if (!results.length) { setStatus("img-query-status", "未检索到相似图片。", false); return; }
           setStatus("img-query-status", `图片检索到 ${results.length} 条：`, true);
-          renderResults(results);
+          renderResults("img-results", results);
         } catch (e) {
           setStatus("img-query-status", "图片检索失败: " + e, false);
         }
@@ -802,7 +832,7 @@
           const results = data.results || [];
           if (!results.length) { setStatus("search-status", "未检索到相关内容。", false); return; }
           setStatus("search-status", `跨 ${kbIds.length} 个知识库检索到 ${results.length} 条：`, true);
-          renderResults(results);
+          renderResults("results", results);
         } catch (e) {
           setStatus("search-status", "检索失败: " + e, false);
         }
@@ -895,6 +925,13 @@
         $("btn-config-save").onclick = saveConfig;
         $("query").addEventListener("keydown", (e) => { if (e.key === "Enter") search(); });
         setupDropzone();
+        setupImageDropzone();
+        // 新知识库 ID 为空时禁用「新建知识库」按钮
+        const updateCreateBtn = () => {
+          $("btn-kb-create").disabled = !$("new-kb").value.trim();
+        };
+        $("new-kb").addEventListener("input", updateCreateBtn);
+        updateCreateBtn();
         await refreshKbs();   // 先加载列表，再应用默认选中（避免渲染竞态）
         loadDefaults();
         loadConfig();
