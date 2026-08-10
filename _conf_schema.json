@@ -101,6 +101,12 @@
     "description": "最终返回数 Top-N",
     "group": "retrieval"
   },
+  "rerank_pool_size": {
+    "type": "int",
+    "default": 60,
+    "description": "重排序候选池上限。多库聚合检索时每个库贡献 top_k 条进候选池，总池不超过此值（防止候选过多导致 Rerank 调用过大）",
+    "group": "retrieval"
+  },
   "ingest_concurrency": {
     "type": "int",
     "default": 2,

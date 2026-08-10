@@ -207,6 +207,7 @@ class AstrBotRAGAdapter:
                 },
                 "top_k": int(cfg.get("top_k", 30)),
                 "top_n": int(cfg.get("top_n", 6)),
+                "rerank_pool_size": int(cfg.get("rerank_pool_size", 60)),
                 "ingest_concurrency": int(cfg.get("ingest_concurrency", 2)),
             }
         )

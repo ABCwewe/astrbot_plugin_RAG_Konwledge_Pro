@@ -88,6 +88,9 @@ class RAGConfig:
     chunking: ChunkingConfig = field(default_factory=ChunkingConfig)
     top_k: int = 30
     top_n: int = 6
+    #: Rerank candidate-pool cap. In multi-KB aggregation every KB contributes
+    #: up to ``top_k`` candidates, but the merged pool never exceeds this.
+    rerank_pool_size: int = 60
     kb_id: str = "default"
     #: Max concurrent index operations (rebuild/incremental sync) across the
     #: engine. Multiple uploads are queued server-side beyond this limit.
@@ -151,6 +154,7 @@ class RAGConfig:
                 ),
                 top_k=int(data.get("top_k", 30)),
                 top_n=int(data.get("top_n", 6)),
+                rerank_pool_size=int(data.get("rerank_pool_size", 60)),
                 kb_id=str(data.get("kb_id", "default")),
                 ingest_concurrency=int(data.get("ingest_concurrency", 2)),
             )
@@ -192,6 +196,8 @@ class RAGConfig:
             raise ConfigurationError("rerank.enabled 时需配置 rerank.api_base/api_key/model")
         if self.top_k <= 0 or self.top_n <= 0:
             raise ConfigurationError("top_k/top_n 必须大于 0")
+        if self.rerank_pool_size < self.top_n:
+            raise ConfigurationError("rerank_pool_size 不能小于 top_n")
         if self.ingest_concurrency <= 0:
             raise ConfigurationError("ingest_concurrency 必须大于 0")
 
