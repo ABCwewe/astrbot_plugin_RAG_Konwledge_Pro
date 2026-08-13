@@ -39,6 +39,7 @@ pip install -r requirements.txt   # qdrant-client, httpx, PyMuPDF, Pillow
 在 AstrBot 插件管理页（或 `_conf_schema.json`）中填写：
 
 - `qdrant_url` / `qdrant_api_key`（本地开发模式可不填 Key）
+- `qdrant_collection_prefix`（可选）：Qdrant collection 命名空间前缀。多个 client 共享同一 Qdrant 后端时，每个 client 设为唯一值即可隔离集合（避免误删/误认）；**留空则自动使用本机设备指纹生成的命名空间**（首次生成后持久化到 plugin_data，长期稳定）。修改后新索引使用新前缀，旧索引按 manifest 继续可用
 - `embedding_api_base` / `embedding_api_key` / `embedding_model` / `embedding_dimension`
 - `rerank_api_base` / `rerank_api_key` / `rerank_model`
 - 分块与检索参数：`chunk_size` / `chunk_overlap` / `top_k` / `top_n`

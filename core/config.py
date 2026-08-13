@@ -23,6 +23,10 @@ class QdrantConfig:
     url: str = "http://127.0.0.1:6333"
     api_key: str | None = None
     timeout: float = 60.0
+    #: Collection 命名空间前缀。多个 client 共享同一 Qdrant 后端时，每个
+    #: client 应有唯一前缀以隔离集合（避免互相误删/误认）。空串表示使用
+    #: 设备指纹自动生成的命名空间（由 adapter 解析并持久化后注入）。
+    collection_prefix: str = ""
 
 
 @dataclass(frozen=True)
@@ -115,6 +119,7 @@ class RAGConfig:
                     url=q.get("url", "http://127.0.0.1:6333"),
                     api_key=q.get("api_key") or None,
                     timeout=q.get("timeout", 60.0),
+                    collection_prefix=str(q.get("collection_prefix", "") or ""),
                 ),
                 embedding=EmbeddingConfig(
                     provider=e.get("provider", "openai_compatible"),

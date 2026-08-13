@@ -22,9 +22,11 @@ from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
 try:  # loaded as part of the plugin package inside AstrBot
     from ..core import RAGConfig, RAGEngine
     from ..core.exceptions import ConfigurationError, RAGError
+    from ..core.naming import compute_device_namespace
 except ImportError:  # standalone (tests / scripts)
     from core import RAGConfig, RAGEngine
     from core.exceptions import ConfigurationError, RAGError
+    from core.naming import compute_device_namespace
 
 from .config_utils import (
     apply_patch,
@@ -113,8 +115,7 @@ class AstrBotRAGAdapter:
     async def _restart_engine(self) -> None:
         """(Re)build the engine from the current config. Safe to call when
         config changes at runtime (WebUI) — closes the old engine first."""
-        rag_config = self._build_rag_config()
-        rag_config.validate()
+        # 先确定数据目录：自动 collection 命名空间需要持久化到 plugin_data。
         if self._data_dir is None:
             # 所有运行时文件（索引、缓存、临时文件）统一放在
             # data/plugin_data/astrbot_plugin_RAG_Konwledge_Pro/ 下，
@@ -130,6 +131,8 @@ class AstrBotRAGAdapter:
             self._data_dir = data_dir
             self._tmp_dir = data_dir / "tmp"
             self._tmp_dir.mkdir(parents=True, exist_ok=True)
+        rag_config = self._build_rag_config()
+        rag_config.validate()
         old_engine = self._engine
         new_engine = RAGEngine(rag_config, self._data_dir)
         if old_engine is not None:
@@ -137,9 +140,10 @@ class AstrBotRAGAdapter:
         self._engine = new_engine
         self.default_kb = str(self._cfg.get("default_kb_id", "default"))
         astrbot_logger.info(
-            "[RAG] 引擎已就绪 (kb=%s, qdrant=%s, data=%s)",
+            "[RAG] 引擎已就绪 (kb=%s, qdrant=%s, collection_prefix=%s, data=%s)",
             self.default_kb,
             rag_config.qdrant.url,
+            rag_config.qdrant.collection_prefix or "auto(device)",
             self._data_dir,
         )
 
@@ -162,6 +166,35 @@ class AstrBotRAGAdapter:
 
     # -- config -----------------------------------------------------------
 
+    def _resolve_collection_prefix(self) -> str:
+        """解析 Qdrant collection 命名空间前缀。
+
+        优先级：
+        1. 显式配置 ``qdrant_collection_prefix``（手动控制 / 故意共享）
+        2. plugin_data 中已持久化的自动命名空间（设备指纹生成，长期稳定）
+        3. 首次运行：由设备指纹计算并持久化
+
+        返回空串时由 ``core`` 回退到遗留 ``astrbot_rag``。
+        """
+        explicit = str(self._cfg.get("qdrant_collection_prefix", "") or "").strip()
+        if explicit:
+            return explicit
+        if self._data_dir is None:
+            return ""
+        ns_file = self._data_dir / "qdrant_namespace"
+        try:
+            if ns_file.exists():
+                value = ns_file.read_text(encoding="utf-8").strip()
+                if value:
+                    return value
+            value = compute_device_namespace()
+            self._data_dir.mkdir(parents=True, exist_ok=True)
+            ns_file.write_text(value, encoding="utf-8")
+            return value
+        except OSError:
+            logger.warning("[RAG] 持久化 collection 命名空间失败，本次使用临时值")
+            return compute_device_namespace()
+
     def _build_rag_config(self) -> RAGConfig:
         cfg = self._cfg
         return RAGConfig.from_dict(
@@ -171,6 +204,7 @@ class AstrBotRAGAdapter:
                     "url": cfg.get("qdrant_url", "http://127.0.0.1:6333"),
                     "api_key": cfg.get("qdrant_api_key") or None,
                     "timeout": float(cfg.get("qdrant_timeout", 60)),
+                    "collection_prefix": self._resolve_collection_prefix(),
                 },
                 "embedding": {
                     "api_base": cfg.get("embedding_api_base", ""),

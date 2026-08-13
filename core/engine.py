@@ -107,6 +107,7 @@ class RAGEngine:
             image_embedding=self._image_embedding,
             ingest_concurrency=config.ingest_concurrency,
             image_max_side=config.image.max_side,
+            collection_prefix=config.qdrant.collection_prefix,
         )
         self._retriever = Retriever(
             self._store,

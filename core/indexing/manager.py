@@ -45,9 +45,15 @@ from .manifest import (
     IndexManifest,
     ManifestStore,
     collection_name_for,
+    normalize_namespace,
 )
 
 logger = logging.getLogger("rag.index.manager")
+
+#: 文档注册表节流持久化间隔（秒）。索引进度中每处理完一批文档后落盘一次，
+#: 使 WebUI 的文档列表 / 上传条目能逐文件实时显示"已索引"；太频繁会在大
+#: 知识库（大量 unchanged 快速跳过）时产生过多磁盘写。
+_REGISTRY_SAVE_INTERVAL = 1.0
 
 
 class _IndexLimiter:
@@ -131,6 +137,7 @@ class IndexManager:
         parsers: ParserRegistry | None = None,
         ingest_concurrency: int = 2,
         image_max_side: int = 0,
+        collection_prefix: str = "",
     ) -> None:
         self._store = store
         self._embedding = embedding
@@ -140,10 +147,16 @@ class IndexManager:
         self._parsers = parsers or ParserRegistry()
         self._data_root = Path(data_root)
         self._image_max_side = image_max_side
+        # 本部署的 collection 命名空间（多 client 共享 Qdrant 时用于隔离，
+        # 也是删除/清理前归属校验的依据）。
+        self._collection_prefix = normalize_namespace(collection_prefix)
         self._locks: dict[str, asyncio.Lock] = {}
         self._progress: dict[str, BuildProgress] = {}
         self._limiter = _IndexLimiter(ingest_concurrency)
         self._op_counts = {"rebuild": 0, "sync": 0}
+        # 文档注册表节流持久化的时间戳（每个知识库一次）：
+        # 索引进度中定期落盘，让 WebUI 逐文件显示"已索引"。
+        self._registry_last_save: dict[str, float] = {}
 
     def get_index_stats(self) -> dict:
         """Live index-queue stats: running / queued / completed / max."""
@@ -178,6 +191,19 @@ class IndexManager:
             parsers=self._parsers,
             image_embedding=self._image_embedding,
             image_max_side=self._image_max_side,
+        )
+
+    def _owns_collection(self, name: str) -> bool:
+        """本部署是否拥有该 collection（删除/清理前的归属校验）。
+
+        规则：名字以本命名空间开头，或属于升级前遗留的 ``astrbot_rag_*``
+        （旧 manifest 仍引用它们，删除库/索引时需要一并清理）。多个 client
+        共享同一 Qdrant 时，不属于本命名空间的集合一律跳过，绝不误删。
+        """
+        if not name:
+            return False
+        return name.startswith(self._collection_prefix + "_") or name.startswith(
+            "astrbot_rag_"
         )
 
     # -- progress ---------------------------------------------------------
@@ -265,6 +291,9 @@ class IndexManager:
                     progress=lambda done, total, chunks: (
                         self._tick_progress(kb_id, done, total, chunks)
                     ),
+                    persist=lambda docs: self._persist_documents_live(
+                        kb_id, store, docs
+                    ),
                 )
                 await store.save_documents(documents)
                 manifest.document_count = len(documents)
@@ -312,10 +341,18 @@ class IndexManager:
             store = self._manifest_store(kb_id)
             manifests = await store.list_manifests()
             for manifest in manifests.values():
-                try:
-                    await self._store.delete_collection(manifest.collection_name)
-                except QdrantError as exc:
-                    logger.warning("[QDRANT] 删除 collection 失败: %s", exc)
+                if self._owns_collection(manifest.collection_name):
+                    try:
+                        await self._store.delete_collection(manifest.collection_name)
+                    except QdrantError as exc:
+                        logger.warning("[QDRANT] 删除 collection 失败: %s", exc)
+                else:
+                    # 归属校验：manifest 引用了非本命名空间的集合（配置/迁移
+                    # 错误或共享后端），绝不能删——那可能是其他 client 的数据。
+                    logger.warning(
+                        "[QDRANT] 跳过删除非本命名空间 collection: %s",
+                        manifest.collection_name,
+                    )
             root = self._kb_root(kb_id)
             if root.exists():
                 await asyncio.to_thread(_rmtree_retry, root)
@@ -329,10 +366,17 @@ class IndexManager:
             store = self._manifest_store(kb_id)
             manifests = await store.list_manifests()
             for manifest in manifests.values():
-                try:
-                    await self._store.delete_collection(manifest.collection_name)
-                except QdrantError as exc:
-                    logger.warning("[QDRANT] 删除 collection 失败: %s", exc)
+                if self._owns_collection(manifest.collection_name):
+                    try:
+                        await self._store.delete_collection(manifest.collection_name)
+                    except QdrantError as exc:
+                        logger.warning("[QDRANT] 删除 collection 失败: %s", exc)
+                else:
+                    logger.warning(
+                        "[QDRANT] 跳过删除非本命名空间 collection: %s",
+                        manifest.collection_name,
+                    )
+                # manifest 文件属于本部署本地数据，无论引用的集合归属如何都删除
                 await store.delete_manifest(manifest.version)
             for path in (store.active_path, store.documents_path):
                 if path.exists():
@@ -379,7 +423,7 @@ class IndexManager:
         active = await store.load_active()
 
         next_version = (max(manifests) + 1) if manifests else 1
-        collection = collection_name_for(kb_id, next_version)
+        collection = collection_name_for(self._collection_prefix, kb_id, next_version)
         manifest = IndexManifest.from_config(
             kb_id, next_version, config, status=STATUS_CREATING
         )
@@ -402,9 +446,16 @@ class IndexManager:
                 # A collection with the target name can never be referenced by a
                 # READY manifest (next_version > every manifest version), so if it
                 # exists it is an orphan from an aborted build — drop it first.
+                # 归属校验：只清理属于本命名空间的 collection，防止多个 client
+                # 共享同一 Qdrant 时误删他人的同名集合。
                 if await self._store.collection_exists(collection):
-                    logger.warning("[INDEX] 清理遗留 collection: %s", collection)
-                    await self._store.delete_collection(collection)
+                    if self._owns_collection(collection):
+                        logger.warning("[INDEX] 清理遗留 collection: %s", collection)
+                        await self._store.delete_collection(collection)
+                    else:
+                        logger.warning(
+                            "[INDEX] 跳过清理非本命名空间 collection: %s", collection
+                        )
                 await self._store.create_collection(collection, vectors)
                 logger.info("[INDEX] 已创建新 collection: %s", collection)
 
@@ -427,6 +478,9 @@ class IndexManager:
                     documents,
                     progress=lambda done, total, chunks: (
                         self._tick_progress(kb_id, done, total, chunks)
+                    ),
+                    persist=lambda docs: self._persist_documents_live(
+                        kb_id, store, docs
                     ),
                 )
                 if stats.errors:
@@ -514,6 +568,19 @@ class IndexManager:
         progress.total_documents = total
         progress.processed_chunks = chunks
         _touch(progress)
+
+    async def _persist_documents_live(self, kb_id: str, store, documents) -> None:
+        """索引进度中节流持久化文档注册表（AGENTS.md 一致性）。
+
+        每次索引操作收尾时的最终 ``save_documents`` 仍由调用方负责；
+        这里只在波次进行中按 ``_REGISTRY_SAVE_INTERVAL`` 定期落盘，
+        让 WebUI 能实时看到哪些文件已索引完成。``documents`` 为正在被
+        原地更新的同一字典，读取即当前进度。
+        """
+        now = time.monotonic()
+        if now - self._registry_last_save.get(kb_id, 0.0) >= _REGISTRY_SAVE_INTERVAL:
+            self._registry_last_save[kb_id] = now
+            await store.save_documents(documents)
 
     def _list_docs(self, kb_id: str) -> list[Path]:
         docs_dir = self._docs_dir(kb_id)
