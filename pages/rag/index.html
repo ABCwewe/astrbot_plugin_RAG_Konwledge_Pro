@@ -6,244 +6,496 @@
   <title>增强 RAG 知识库</title>
   <style>
     :root {
-      --bg: #f7f8fa; --card: #ffffff; --text: #1f2329; --muted: #6b7280;
-      --border: #e5e7eb; --accent: #4f6ef7; --accent-text: #ffffff;
-      --danger: #e5484d; --ok: #30a46c; --warn: #f5a623; --drop: rgba(79,110,247,.08);
+      --bg: #ffffff; --card: #ffffff; --text: #1f2329; --muted: #6b7280;
+      --border: #e4e7ee; --border-strong: #d3d7e0;
+      --accent: #2f86bd; --accent-weak: rgba(47,134,189,.12); --accent-text: #ffffff;
+      --danger: #e5484d; --danger-weak: rgba(229,72,77,.1);
+      --ok: #30a46c; --ok-weak: rgba(48,164,108,.12);
+      --warn: #b26a00; --warn-weak: rgba(242,159,57,.16);
+      --scrollbar: #9aa1ad; --scrollbar-hover: #6b7280;
+      /* 按钮三态：默认纯白 / 悬浮(#F7FAFC,#7FB4D6) / 选中(#E6F0F7,#2F86BD) */
+      --btn-bg: #ffffff;
+      --btn-text: #7a7a7a;
+      --btn-icon: #7a7a7a;
+      --btn-hover-bg: #f7fafc;
+      --btn-hover-text: #7fb4d6;
+      --btn-active-bg: #e6f0f7;
+      --btn-active-text: #2f86bd;
+      --shadow-sm: 0 1px 2px rgba(16,24,40,.05), 0 1px 3px rgba(16,24,40,.06);
+      --shadow-md: 0 10px 34px rgba(16,24,40,.16);
+      --radius: 12px; --radius-sm: 8px;
     }
     html[data-theme="dark"] {
-      --bg: #14161a; --card: #1e2126; --text: #e6e8ec; --muted: #9aa0a8;
-      --border: #2c3037; --accent: #6b8afd; --drop: rgba(107,138,253,.1);
+      --bg: #121419; --card: #1c1f26; --text: #e6e8ec; --muted: #9aa0a8;
+      --border: #2b303b; --border-strong: #3a4150;
+      --accent: #6b8afd; --accent-weak: rgba(107,138,253,.15);
+      --danger: #f2555a; --danger-weak: rgba(242,85,90,.13);
+      --ok: #3dbe7d; --ok-weak: rgba(61,190,125,.14);
+      --warn: #e8a33d; --warn-weak: rgba(232,163,61,.16);
+      --scrollbar: #525b6c; --scrollbar-hover: #6f7a8c;
+      --btn-bg: #1c1f26;
+      --btn-text: #9aa0a8;
+      --btn-icon: #9aa0a8;
+      --btn-hover-bg: #262b34;
+      --btn-hover-text: #7fb4d6;
+      --btn-active-bg: #e6f0f7;
+      --btn-active-text: #2f86bd;
+      --shadow-sm: 0 1px 2px rgba(0,0,0,.3);
+      --shadow-md: 0 12px 38px rgba(0,0,0,.5);
     }
     * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    /* 保留滚动条槽位，避免子页切换时因滚动条出现/消失导致内容左右偏移 */
+    html { scrollbar-gutter: stable; }
     body {
-      margin: 0 auto; padding: 20px; max-width: 800px;
       background: var(--bg); color: var(--text);
-      font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
       font-size: 14px; line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
     }
-    h1 { font-size: 18px; margin: 0 0 16px; }
-    h2 { font-size: 15px; margin: 0 0 12px; }
+    .page { max-width: 920px; margin: 0 auto; padding: 18px 20px 48px; }
+
+    /* ---------- 滚动条（全圆角胶囊形、无上下箭头） ---------- */
+    /* Firefox：仅支持 scrollbar-width / scrollbar-color；显式覆盖根与所有元素，直接写颜色 */
+    html, body, * { scrollbar-width: thin; scrollbar-color: #9aa1ad #eef1f5; }
+    html[data-theme="dark"] body, html[data-theme="dark"] * { scrollbar-color: #525b6c #1b2027; }
+    /* Chromium/WebKit：显式带 * 与 html 前缀，确保根滚动条与所有内部滚动条都生效 */
+    *::-webkit-scrollbar, html::-webkit-scrollbar { width: 10px; height: 10px; }
+    *::-webkit-scrollbar-track, html::-webkit-scrollbar-track { background: transparent; }
+    *::-webkit-scrollbar-button, html::-webkit-scrollbar-button { display: none !important; width: 0 !important; height: 0 !important; }
+    *::-webkit-scrollbar-thumb, html::-webkit-scrollbar-thumb {
+      background: var(--scrollbar); border-radius: 999px;
+      border: 2px solid transparent; background-clip: content-box;
+    }
+    *::-webkit-scrollbar-thumb:hover, html::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-hover); background-clip: content-box; }
+    *::-webkit-scrollbar-corner, html::-webkit-scrollbar-corner { background: transparent; }
+
+    /* ---------- 头部 ---------- */
+    .page-header { display: flex; align-items: baseline; gap: 12px; margin: 4px 0 16px; flex-wrap: wrap; }
+    .page-header h1 { font-size: 20px; margin: 0; font-weight: 700; letter-spacing: .2px; }
+    .page-header h1 .dot { color: var(--accent); }
+    .page-sub { margin: 0; color: var(--muted); font-size: 12.5px; }
+
+    /* ---------- Tab ---------- */
+    .tabs {
+      position: sticky; top: 0; z-index: 20; display: flex; gap: 6px;
+      padding: 8px 2px 10px; margin-bottom: 14px;
+      background: linear-gradient(var(--bg) 82%, transparent);
+    }
+    .tab-btn {
+      padding: 8px 20px; border-radius: 6px; border: 1px solid var(--border-strong);
+      background: var(--btn-bg); color: var(--btn-text); cursor: pointer; font-size: 14px;
+      transition: all .15s ease; font-weight: 500;
+    }
+    .tab-btn:hover { background: var(--btn-hover-bg); color: var(--btn-hover-text); border-color: var(--border-strong); }
+    .tab-btn:active { background: var(--btn-active-bg); color: var(--btn-active-text); border-color: var(--btn-active-bg); }
+    .tab-btn.active {
+      background: var(--btn-active-bg); border-color: var(--btn-active-bg); color: var(--btn-active-text);
+      box-shadow: 0 4px 14px var(--accent-weak);
+    }
+    .panel { display: none; }
+    .panel.active { display: block; animation: fadeIn .18s ease; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+
+    /* ---------- 卡片 ---------- */
     .card {
       background: var(--card); border: 1px solid var(--border);
-      border-radius: 10px; padding: 16px; margin-bottom: 16px;
+      border-radius: var(--radius); padding: 16px 18px; margin-bottom: 16px;
+      box-shadow: var(--shadow-sm);
     }
+    .card h2 { font-size: 14.5px; margin: 0 0 12px; font-weight: 600; }
     .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-    label { color: var(--muted); font-size: 12px; }
-    input[type=text], input[type=password], input[type=number], select {
-      padding: 8px 10px; border-radius: 6px;
-      border: 1px solid var(--border); background: var(--card); color: var(--text);
-      font-size: 14px;
-    }
-    input[type=text] { min-width: 160px; }
-    button {
-      padding: 8px 14px; border-radius: 6px; border: 1px solid var(--border);
-      background: var(--card); color: var(--text); cursor: pointer; font-size: 14px;
-    }
-    button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
-    button.danger { border-color: var(--danger); color: var(--danger); }
-    button:disabled { opacity: 0.5; cursor: not-allowed; }
-    pre, .result-item {
-      background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
-      padding: 10px; margin: 8px 0; white-space: pre-wrap; word-break: break-word;
-    }
     .meta { color: var(--muted); font-size: 12px; }
+
+    /* ---------- 表单控件 ---------- */
+    input[type=text], input[type=password], input[type=number], select {
+      padding: 8px 12px; border-radius: var(--radius-sm);
+      border: 1px solid var(--border-strong); background: var(--card); color: var(--text);
+      font-size: 14px; outline: none; transition: border-color .15s, box-shadow .15s;
+    }
+    input[type=text]:focus, input[type=password]:focus, input[type=number]:focus, select:focus {
+      border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-weak);
+    }
+    input[type=text] { min-width: 170px; }
+    button {
+      position: relative; overflow: hidden;
+      isolation: isolate;  /* 独立层叠上下文：让涟漪(负z-index)位于背景之上、文本之下 */
+      padding: 8px 15px; border-radius: 6px; border: 1px solid var(--border-strong);
+      background: var(--btn-bg); color: var(--btn-text); cursor: pointer; font-size: 13.5px;
+      font-weight: 500; transition: all .15s ease; white-space: nowrap;
+    }
+    button:hover { background: var(--btn-hover-bg); color: var(--btn-hover-text); border-color: var(--border-strong); }
+    /* 按下立即切到深色（选中高亮）方案，不停留在悬浮配色 */
+    button:active {
+      transform: translateY(1px);
+      background: var(--btn-active-bg); color: var(--btn-active-text);
+      border-color: var(--btn-active-bg);
+    }
+    button:disabled { opacity: .45; cursor: not-allowed; transform: none; }
+    /* 选中/高亮：主按钮与激活 Tab 使用同一套高亮配色 */
+    button.primary { background: var(--btn-active-bg); border-color: var(--btn-active-bg); color: var(--btn-active-text); }
+    /* 已是深色方案的主按钮：悬浮保持深色，仅轻微加深以示反馈，不切回浅色 */
+    button.primary:hover { background: var(--btn-active-bg); color: var(--btn-active-text); filter: brightness(.97); }
+    button.primary:active { background: var(--btn-active-bg); color: var(--btn-active-text); filter: none; }
+    /* 危险操作保留红色语义（悬停/按下仍为红，防止误触破坏性操作） */
+    button.danger { border-color: transparent; background: var(--danger-weak); color: var(--danger); }
+    button.danger:hover { background: var(--danger); color: #fff; border-color: transparent; }
+    .icon-btn {
+      position: relative; overflow: hidden;
+      padding: 5px 7px; line-height: 1; border-radius: 6px; border: 1px solid transparent;
+      background: var(--btn-bg); color: var(--btn-icon);
+    }
+    .icon-btn:hover { background: var(--btn-hover-bg); color: var(--btn-hover-text); border-color: var(--border-strong); }
+    .icon-btn:active { background: var(--btn-active-bg); color: var(--btn-active-text); border-color: var(--btn-active-bg); }
+    .icon-btn svg { display: block; width: 14px; height: 14px; }
+    /* 涟漪（按下触发、松开释放）；z-index:-1 使其绘制在按钮文本下方 */
+    .ripple {
+      position: absolute; border-radius: 50%;
+      background: #c5ddec; pointer-events: none;
+      transform: scale(0); opacity: .9;
+      z-index: -1;
+      animation: ripple-in .35s ease-out forwards;
+      transition: opacity .22s ease;
+    }
+    .ripple.releasing { opacity: 0; }
+    @keyframes ripple-in { to { transform: scale(1); } }
+
+    /* ---------- 徽章 ---------- */
     .badge {
-      display: inline-block; padding: 1px 8px; border-radius: 10px;
-      font-size: 12px; background: var(--border); color: var(--muted);
+      display: inline-block; padding: 1px 9px; border-radius: 999px;
+      font-size: 11.5px; font-weight: 600; white-space: nowrap;
+      background: var(--border); color: var(--muted);
     }
-    .badge.ok { background: rgba(48,164,108,.15); color: var(--ok); }
-    .badge.warn { background: rgba(245,166,35,.15); color: var(--warn); }
-    .badge.err { background: rgba(229,72,77,.15); color: var(--danger); }
-    .status { margin-top: 8px; min-height: 20px; color: var(--muted); }
+    .badge.ok { background: var(--ok-weak); color: var(--ok); }
+    .badge.warn { background: var(--warn-weak); color: var(--warn); }
+    .badge.err { background: var(--danger-weak); color: var(--danger); }
+    .badge.pulse { animation: pulse 1.4s ease-in-out infinite; }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .55; } }
 
-    /* 顶部子页 Tab */
-    .tabs { display: flex; gap: 6px; margin-bottom: 16px; flex-wrap: wrap; }
-    .tab-btn {
-      padding: 9px 18px; border-radius: 8px; border: 1px solid var(--border);
-      background: var(--card); color: var(--muted); cursor: pointer; font-size: 14px;
+    .status { margin-top: 8px; min-height: 20px; color: var(--muted); font-size: 12.5px; }
+
+    /* ---------- 进度条 ---------- */
+    .progress {
+      position: relative; height: 8px; border-radius: 999px; overflow: hidden;
+      background: var(--border); margin-top: 8px;
     }
-    .tab-btn.active { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
-    .panel { display: none; }
-    .panel.active { display: block; }
+    .progress-fill {
+      height: 100%; border-radius: inherit; width: 0%;
+      background: linear-gradient(90deg, var(--accent), #7f9cff);
+      transition: width .35s ease;
+    }
+    .progress-fill.ok { background: linear-gradient(90deg, var(--ok), #57c08a); }
+    .progress.indeterminate::after {
+      content: ""; position: absolute; inset: 0; width: 42%; border-radius: inherit;
+      background: linear-gradient(90deg, transparent, var(--accent), transparent);
+      animation: slide 1.15s ease-in-out infinite;
+    }
+    @keyframes slide { from { transform: translateX(-110%); } to { transform: translateX(360%); } }
+    /* 进度标签行：高度固定（不随文本长度变化），超长省略号 */
+    .progress-label { display: flex; justify-content: space-between; gap: 10px; color: var(--muted); font-size: 12px; margin-top: 10px; height: 18px; line-height: 18px; overflow: hidden; }
+    .progress-label span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+    /* 队列状态行：同样固定高度 + 省略号 */
+    #queue-status { height: 18px; line-height: 18px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-    /* 知识库列表 */
-    .kb-list { display: flex; flex-direction: column; gap: 8px; }
+    /* ---------- 知识库列表 ---------- */
+    .kb-list { display: flex; flex-direction: column; gap: 8px; max-height: 340px; overflow-y: auto; padding-right: 4px; }
     .kb-item {
-      display: flex; align-items: center; gap: 10px;
-      border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
+      display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+      border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 12px;
+      background: var(--btn-bg); color: var(--btn-text); cursor: pointer;
+      transition: border-color .15s, background .15s, color .15s;
     }
-    .kb-item.selected { border-color: var(--accent); background: var(--drop); }
-    .kb-name { font-weight: 600; min-width: 120px; }
-    .kb-stats { color: var(--muted); font-size: 12px; flex: 1; }
+    .kb-item:hover { border-color: var(--btn-hover-text); background: var(--btn-hover-bg); color: var(--btn-hover-text); }
+    .kb-item.selected { border-color: var(--btn-active-text); background: var(--btn-active-bg); color: var(--btn-active-text); }
+    .kb-name { font-weight: 600; min-width: 110px; }
+    .kb-stats { color: inherit; font-size: 12px; flex: 1; min-width: 130px; }
+    .kb-item .actions { display: flex; gap: 6px; margin-left: auto; }
 
-    /* 默认聚合库勾选 */
-    .kb-check { display: flex; gap: 10px; flex-wrap: wrap; }
+    /* ---------- 默认聚合库勾选 ---------- */
+    .kb-check { display: flex; gap: 8px; flex-wrap: wrap; }
     .kb-check label {
       display: flex; align-items: center; gap: 6px; padding: 6px 12px;
-      border: 1px solid var(--border); border-radius: 8px; cursor: pointer;
-      color: var(--text); font-size: 13px;
+      border: 1px solid var(--border-strong); border-radius: 6px; cursor: pointer;
+      background: var(--btn-bg); color: var(--btn-text); font-size: 13px; transition: all .15s;
+      -webkit-user-select: none; user-select: none;  /* 胶囊文字不可选中/复制 */
     }
-    .kb-check label.checked { border-color: var(--accent); background: var(--drop); }
-    .kb-check input { width: 15px; height: 15px; }
+    .kb-check label:hover { background: var(--btn-hover-bg); color: var(--btn-hover-text); border-color: var(--border-strong); }
+    .kb-check label:active { background: var(--btn-active-bg); color: var(--btn-active-text); border-color: var(--btn-active-bg); }
+    .kb-check label.checked { border-color: var(--btn-active-bg); background: var(--btn-active-bg); color: var(--btn-active-text); }
+    .kb-check input { display: none; }  /* 隐藏原生 checkbox，点击胶囊仍会切换 */
 
-    /* 拖拽上传区 */
+    /* ---------- 拖拽上传区 ---------- */
     .dropzone {
-      border: 2px dashed var(--border); border-radius: 10px;
-      padding: 26px 16px; text-align: center; color: var(--muted);
-      cursor: pointer; transition: border-color .15s, background .15s;
+      border: 2px dashed var(--border-strong); border-radius: var(--radius);
+      padding: 26px 16px; text-align: center; color: var(--muted); cursor: pointer;
+      transition: all .18s ease; user-select: none;
     }
-    .dropzone.dragover { border-color: var(--accent); background: var(--drop); color: var(--accent); }
+    .dropzone:hover, .dropzone.dragover { border-color: var(--accent); background: var(--accent-weak); color: var(--accent); }
+    .dropzone .dz-icon { display: block; font-size: 26px; margin-bottom: 6px; opacity: .8; }
+    .dropzone .dz-hint { font-size: 12.5px; }
 
-    /* 文档列表 */
+    /* ---------- 待上传列表（外框 + 条目样式与文档列表一致） ---------- */
+    .pending-list {
+      display: flex; flex-direction: column;
+      margin-top: 12px; height: 220px; overflow-y: auto;
+      border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+      padding-right: 4px;
+    }
+    /* 条目：去卡片化，与 .doc-item 相同（分割线式） */
+    .pending-item { border-bottom: 1px solid var(--border); }
+    .pending-item:last-child { border-bottom: none; }
+    .pending-item .top { display: flex; align-items: center; gap: 10px; padding: 8px 10px; }
+    .pending-item .bar { height: 3px; border-radius: 999px; overflow: hidden; background: var(--border); margin: 0 10px 8px; position: relative; }
+    .pending-item .bar::after { content: ""; position: absolute; inset: 0; width: 42%; border-radius: inherit; background: var(--accent); animation: slide 1.15s ease-in-out infinite; }
+    /* 空列表占位：由父容器（.pending-list.is-empty）水平垂直居中，最稳妥 */
+    .pending-list.is-empty { align-items: center; justify-content: center; }
+    .pending-empty { color: var(--muted); font-size: 12.5px; text-align: center; padding: 0 10px; }
+
+    /* ---------- 文档列表 ---------- */
+    .doc-list { display: flex; flex-direction: column; max-height: 400px; overflow-y: auto; padding-right: 4px; margin-top: 8px; }
     .doc-item {
       display: flex; align-items: center; gap: 10px;
       padding: 8px 10px; border-bottom: 1px solid var(--border);
     }
     .doc-item:last-child { border-bottom: none; }
+    .doc-item.pending-local { opacity: .85; }
     .doc-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .doc-size { color: var(--muted); font-size: 12px; white-space: nowrap; }
 
-    /* 悬浮窗 */
+    /* ---------- 悬浮窗 ---------- */
     .modal-overlay {
-      position: fixed; inset: 0; background: rgba(0,0,0,.45);
+      position: fixed; inset: 0; background: rgba(10,12,18,.5);
       display: none; align-items: center; justify-content: center; z-index: 100;
+      backdrop-filter: blur(2px);
     }
     .modal-overlay.open { display: flex; }
     .modal {
       background: var(--card); border: 1px solid var(--border);
-      border-radius: 12px; max-width: 640px; width: calc(100% - 40px);
-      max-height: 86vh; overflow-y: auto; padding: 18px 20px;
+      border-radius: var(--radius); max-width: 1080px; width: calc(100% - 32px);
+      max-height: 94vh; overflow-y: auto; padding: 20px 22px;
+      box-shadow: var(--shadow-md); animation: fadeIn .18s ease;
     }
-    .modal h3 { margin: 0 0 12px; font-size: 16px; }
-    .modal .close-x {
-      float: right; border: none; background: none; color: var(--muted);
-      font-size: 20px; cursor: pointer; padding: 0 4px;
+    .modal.small { max-width: 430px; }
+    /* 知识库配置弹窗：保证足够的最小高度，内容少时也不会缩得太矮 */
+    /* 固定最大高度：弹窗高度恒定，列表扩展不会把弹窗撑大（列表内部滚动） */
+    #modal-kb .modal { height: min(88vh, 860px); display: flex; flex-direction: column; }
+    .modal-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 6px; }
+    .modal-header h3 { margin: 0; font-size: 16px; font-weight: 650; }
+    .close-x {
+      border: none; background: none; color: var(--muted); font-size: 22px;
+      cursor: pointer; padding: 0 6px; line-height: 1; border-radius: 6px;
     }
+    .close-x:hover { color: var(--text); background: var(--accent-weak); }
     .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }
     .modal-msg { white-space: pre-wrap; word-break: break-word; margin: 4px 0 16px; }
-
-    /* 配置表单 */
-    fieldset {
-      border: 1px solid var(--border); border-radius: 8px;
-      margin: 0 0 14px; padding: 12px 14px;
+    .status-line {
+      display: flex; flex-direction: column; gap: 3px; padding: 10px 12px; margin: 10px 0;
+      border-radius: var(--radius-sm); background: var(--bg); font-size: 12.5px;
     }
-    legend { padding: 0 6px; font-weight: 600; color: var(--accent); }
+
+    /* ---------- 知识库模态双栏 ---------- */
+    /* 行显式 minmax(0,1fr)：行高=网格高度（弹窗固定），列表内容再多也只内部滚动，弹窗不再被撑大 */
+    .kb-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); grid-template-rows: minmax(0, 1fr); gap: 18px; margin-top: 4px; flex: 1; min-height: 0; }
+    /* 左右两栏各自成带边框的分区，便于区分 */
+    .kb-grid .section {
+      display: flex; flex-direction: column; min-height: 0;
+      border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+      padding: 12px 14px;
+    }
+    .kb-grid .section h2 { display: flex; align-items: center; gap: 8px; font-size: 14px; margin: 2px 0 10px; font-weight: 600; }
+    /* 文档列表填满右栏剩余高度（不再固定 440px，避免下方大块空白） */
+    .docs-panel .doc-list { flex: 1; min-height: 0; max-height: none; }
+    /* 进度条组（上传 + 索引）贴底，两条始终相邻 */
+    .upload-panel #upload-progress-wrap { margin-top: auto; }
+
+    /* ---------- 配置表单 ---------- */
+    fieldset { border: 1px solid var(--border); border-radius: var(--radius-sm); margin: 0 0 14px; padding: 12px 14px; }
+    legend { padding: 0 6px; font-weight: 600; color: var(--accent); font-size: 13px; }
     .cfg-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
-    .cfg-row label { flex: 0 0 190px; color: var(--text); font-size: 13px; }
+    .cfg-row label { flex: 0 0 185px; color: var(--text); font-size: 13px; }
     .cfg-row input[type=text], .cfg-row input[type=password], .cfg-row input[type=number] { flex: 1; min-width: 200px; }
-    .cfg-desc { flex-basis: 100%; color: var(--muted); font-size: 12px; margin: -4px 0 4px 200px; }
-    .cfg-row input[type=checkbox] { width: 18px; height: 18px; }
+    .cfg-desc { flex-basis: 100%; color: var(--muted); font-size: 12px; margin: -4px 0 4px 195px; }
+    .cfg-row input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--accent); }
+
+    /* ---------- 检索结果 ---------- */
+    .result-item {
+      background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm);
+      padding: 10px 12px; margin: 8px 0; white-space: pre-wrap; word-break: break-word;
+      font-size: 13px;
+    }
+    .result-item .meta { margin-bottom: 4px; }
+
+    .empty { color: var(--muted); text-align: center; padding: 18px 0; font-size: 13px; }
+
+    /* ---------- 底部 toast 提示 ---------- */
+    .toast-container {
+      position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%);
+      z-index: 300; display: flex; flex-direction: column; align-items: center; gap: 8px;
+      width: min(92vw, 480px); pointer-events: none;
+    }
+    /* 纯色实心框：整块同色背景、无额外元素，文字纯白 */
+    .toast {
+      pointer-events: auto;
+      width: 100%; background: #4b5563; color: #ffffff;
+      border-radius: var(--radius-sm); padding: 10px 14px;
+      box-shadow: var(--shadow-md); font-size: 13px; line-height: 1.5;
+      word-break: break-word; animation: toast-in .22s ease;
+    }
+    .toast.ok { background: #457c3c; }
+    .toast.err { background: #f44336; }
+    .toast.hiding { animation: toast-out .28s ease forwards; }
+    @keyframes toast-in { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+    @keyframes toast-out { to { opacity: 0; transform: translateY(10px); } }
+
+    @media (max-width: 720px) {
+      .kb-grid { grid-template-columns: 1fr; grid-template-rows: auto; }
+      .page { padding: 14px 14px 40px; }
+      .kb-item .actions { margin-left: 0; width: 100%; justify-content: flex-end; }
+    }
   </style>
 </head>
 <body>
-  <h1>增强 RAG 知识库</h1>
+  <div class="page">
+    <header class="page-header">
+      <h1>增强 RAG <span class="dot">·</span> 知识库</h1>
+      <p class="page-sub">Qdrant 向量检索 · 在线 Embedding · Reranker</p>
+    </header>
 
-  <div class="tabs">
-    <button class="tab-btn active" data-tab="kb">知识库管理</button>
-    <button class="tab-btn" data-tab="search">检索</button>
-    <button class="tab-btn" data-tab="config">配置</button>
-  </div>
+    <nav class="tabs">
+      <button class="tab-btn active" data-tab="kb">知识库管理</button>
+      <button class="tab-btn" data-tab="search">检索</button>
+      <button class="tab-btn" data-tab="config">配置</button>
+    </nav>
 
-  <!-- ============ 知识库管理 ============ -->
-  <div class="panel active" id="panel-kb">
-    <div class="card">
-      <h2>知识库列表</h2>
-      <div class="row" style="margin-bottom:12px">
-        <input type="text" id="new-kb" placeholder="新知识库 ID">
-        <button class="primary" id="btn-kb-create">新建知识库</button>
-        <button id="btn-kb-refresh">刷新列表</button>
-      </div>
-      <div id="kb-op-status" class="status"></div>
-      <div id="kb-list" class="kb-list status">加载中…</div>
-    </div>
+    <main>
+      <!-- ============ 知识库管理 ============ -->
+      <div class="panel active" id="panel-kb">
+        <div class="card">
+          <h2 style="margin-bottom:10px">默认聚合检索知识库</h2>
+          <div class="meta" style="margin-bottom:10px">勾选/取消即自动保存；检索页将默认勾选这些知识库，检索时可临时调整。</div>
+          <div id="defaults-kbs" class="kb-check"><span class="meta">加载中…</span></div>
+          <div id="defaults-status" class="status"></div>
+        </div>
 
-    <div class="card">
-      <div class="row" style="margin-bottom:12px">
-        <h2 style="flex:1">默认聚合检索知识库</h2>
-        <button class="primary" id="btn-defaults-save">保存默认</button>
+        <div class="card">
+          <h2>知识库列表</h2>
+          <div class="row" style="margin-bottom:12px">
+            <input type="text" id="new-kb" placeholder="新知识库 ID">
+            <button class="primary" id="btn-kb-create">新建知识库</button>
+            <button id="btn-kb-refresh">刷新列表</button>
+          </div>
+          <div id="kb-op-status" class="status"></div>
+          <div id="kb-list" class="kb-list" style="margin-top:8px"><span class="empty">加载中…</span></div>
+        </div>
       </div>
-      <div class="meta" style="margin-bottom:8px">检索页将默认勾选这些知识库；检索时可临时调整。</div>
-      <div id="defaults-kbs" class="kb-check status">加载中…</div>
-      <div id="defaults-status" class="status"></div>
-    </div>
-  </div>
 
-  <!-- ============ 检索 ============ -->
-  <div class="panel" id="panel-search">
-    <div class="card">
-      <h2>选择知识库（可多选）</h2>
-      <div id="search-kbs" class="kb-check status">加载中…</div>
-    </div>
-    <div class="card">
-      <div class="row">
-        <input type="text" id="query" placeholder="输入问题，跨知识库检索…" style="flex:1">
-        <label>保留数量</label>
-        <input type="number" id="top-n" min="1" max="30" value="6" style="width:80px">
-        <button class="primary" id="btn-search">文本检索</button>
+      <!-- ============ 检索 ============ -->
+      <div class="panel" id="panel-search">
+        <div class="card">
+          <h2>选择知识库（可多选）</h2>
+          <div id="search-kbs" class="kb-check"><span class="meta">加载中…</span></div>
+        </div>
+        <div class="card">
+          <div class="row">
+            <input type="text" id="query" placeholder="输入问题，跨知识库检索…" style="flex:1">
+            <label>保留数量</label>
+            <input type="number" id="top-n" min="1" max="30" value="6" style="width:80px">
+            <button class="primary" id="btn-search">文本检索</button>
+          </div>
+          <div id="search-status" class="status"></div>
+        </div>
+        <div class="card">
+          <h2>图片检索测试（以图搜库）</h2>
+          <div class="dropzone" id="img-dropzone">
+            <span class="dz-icon">🖼️</span>
+            <div>拖拽图片到此处，或点击选择</div>
+          </div>
+          <input type="file" id="img-query" accept="image/*" style="display:none">
+          <div id="img-preview" style="display:none; margin-top:12px"></div>
+          <div class="row" style="margin-top:12px">
+            <button class="primary" id="btn-search-image">图片检索</button>
+          </div>
+          <div class="meta" style="margin-top:8px">对选中的知识库做图片向量检索，返回最相似的图片/图文块；无图片向量的库自动跳过。</div>
+          <div id="img-query-status" class="status"></div>
+        </div>
+        <div class="card">
+          <h2>检索结果</h2>
+          <div id="search-results"><div class="empty">（暂无结果，执行文本或图片检索后显示）</div></div>
+        </div>
       </div>
-      <div id="search-status" class="status"></div>
-    </div>
-    <div class="card">
-      <h2>图片检索测试（以图搜库）</h2>
-      <div class="dropzone" id="img-dropzone">
-        拖拽图片到此处，或点击选择
-      </div>
-      <input type="file" id="img-query" accept="image/*" style="display:none">
-      <div id="img-preview" style="display:none; margin-top:10px"></div>
-      <div class="row" style="margin-top:10px">
-        <button class="primary" id="btn-search-image">图片检索</button>
-      </div>
-      <div class="meta" style="margin-top:6px">对选中的知识库做图片向量检索，返回最相似的图片/图文块；无图片向量的库自动跳过。</div>
-      <div id="img-query-status" class="status"></div>
-    </div>
-    <div class="card">
-      <h2>检索结果</h2>
-      <div id="search-results" class="status">（暂无结果，执行文本或图片检索后显示）</div>
-    </div>
-  </div>
 
-  <!-- ============ 配置 ============ -->
-  <div class="panel" id="panel-config">
-    <div class="card">
-      <div class="row" style="margin-bottom:12px">
-        <h2 style="flex:1">配置</h2>
-        <button class="primary" id="btn-config-save">保存配置</button>
+      <!-- ============ 配置 ============ -->
+      <div class="panel" id="panel-config">
+        <div class="card">
+          <div class="row" style="margin-bottom:12px">
+            <h2 style="flex:1">配置</h2>
+            <button class="primary" id="btn-config-save">保存配置</button>
+          </div>
+          <div id="config-form"></div>
+          <div id="config-status" class="status"></div>
+        </div>
       </div>
-      <div id="config-form"></div>
-      <div id="config-status" class="status"></div>
-    </div>
+    </main>
   </div>
 
   <!-- ============ 知识库配置悬浮窗 ============ -->
   <div class="modal-overlay" id="modal-kb">
     <div class="modal">
-      <button class="close-x" id="kb-modal-close">×</button>
-      <h3 id="kb-modal-title">知识库</h3>
-      <div id="kb-modal-status" class="status"></div>
-      <div class="row" style="margin:10px 0">
-        <button class="primary" id="kb-modal-rebuild">重建索引</button>
+      <div class="modal-header">
+        <h3 id="kb-modal-title">知识库</h3>
+        <button class="close-x" id="kb-modal-close" title="关闭">×</button>
+      </div>
+      <div id="kb-modal-status" class="status-line"></div>
+      <div class="row" style="justify-content:flex-end; margin-bottom:12px">
+        <button class="primary" id="kb-modal-rebuild">↻ 重建索引</button>
         <button class="danger" id="kb-modal-drop-index">删除索引</button>
       </div>
-      <h2>上传文档</h2>
-      <div class="dropzone" id="dropzone">
-        拖拽文件到此处，或点击选择（txt / md / pdf / 图片，可多选）
+
+      <div class="kb-grid">
+        <!-- 左：上传 -->
+        <section class="section upload-panel">
+          <h2>上传文档</h2>
+          <div class="dropzone" id="dropzone">
+            <span class="dz-icon">📤</span>
+            <div>拖拽文件到此处，或点击选择</div>
+            <div class="dz-hint">txt / md / pdf / 图片，可多选</div>
+          </div>
+          <input type="file" id="files" multiple accept=".txt,.md,.markdown,.pdf,.png,.jpg,.jpeg,.webp,.bmp,.gif" style="display:none">
+
+          <div id="pending-files" class="pending-list"></div>
+
+          <div class="row" style="margin-top:12px">
+            <button class="primary" id="btn-upload">开始上传</button>
+            <button id="btn-upload-clear">清空</button>
+          </div>
+
+          <div id="upload-status" class="status"></div>
+
+          <!-- 上传进度条贴在索引进度条上方 -->
+          <div id="upload-progress-wrap" hidden>
+            <div class="progress"><div class="progress-fill ok" id="upload-progress-fill"></div></div>
+            <div class="progress-label"><span id="upload-progress-label"></span></div>
+          </div>
+
+          <div id="index-progress" hidden>
+            <div class="progress"><div class="progress-fill" id="index-progress-fill"></div></div>
+            <div class="progress-label"><span id="index-progress-label"></span></div>
+            <div id="queue-status" class="meta" style="margin-top:6px"></div>
+          </div>
+        </section>
+
+        <!-- 右：文档列表 -->
+        <section class="section docs-panel">
+          <h2>文档列表 <span class="badge" id="docs-count"></span></h2>
+          <div id="documents" class="doc-list"><div class="empty">未加载</div></div>
+        </section>
       </div>
-      <input type="file" id="files" multiple accept=".txt,.md,.markdown,.pdf,.png,.jpg,.jpeg,.webp,.bmp,.gif" style="display:none">
-      <div id="pending-files" class="status" style="display:none"></div>
-      <div class="row" style="margin-top:10px">
-        <button class="primary" id="btn-upload">开始上传</button>
-        <button id="btn-upload-clear">清空</button>
-      </div>
-      <div id="upload-status" class="status"></div>
-      <h2 style="margin-top:14px">文档列表</h2>
-      <div id="documents" class="status">未加载</div>
-      <div id="modal-progress" class="status" style="display:none"></div>
     </div>
   </div>
 
   <!-- ============ 确认弹窗 ============ -->
   <div class="modal-overlay" id="modal-confirm">
-    <div class="modal" style="max-width:420px">
+    <div class="modal small">
       <h3 id="confirm-title">确认</h3>
       <div class="modal-msg" id="confirm-msg"></div>
       <div class="modal-actions">
@@ -252,6 +504,9 @@
       </div>
     </div>
   </div>
+
+  <!-- ============ 底部提示（toast） ============ -->
+  <div id="toast-container" class="toast-container"></div>
 
   <script>
     (function () {
@@ -275,6 +530,9 @@
         general: "基础", qdrant: "Qdrant 存储", embedding: "文本 Embedding",
         rerank: "Reranker", chunking: "分块", retrieval: "检索", image: "图片检索",
       };
+      const UPLOAD_BATCH = 3;  // 每批并发上传请求数（上传不等待索引）
+      const TRASH_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>';
+
       let bridge = null;
       let kbs = [];
       let modalKb = null;
@@ -287,10 +545,47 @@
       let groupMembers = {};
       let configValues = {};
 
+      // 上传 / 索引进度状态
+      let pendingFiles = [];      // [{file, status: pending|uploading|error, error}] —— 尚未上传完成的文件
+      let localUploads = [];      // [{name, size}] —— 已上传、服务端文档列表尚未确认出现的文件（先本地展示"排队索引中"）
+      let uploadSession = null;   // {files:[{name,size}], uploaded, failed}
+      let uploadBusy = false;
+      let awaitingDrain = false;  // 上传已全部完成，等待索引队列排空
+      let progressPollActive = false;
+      let progressPollDeadline = 0;   // 僵尸保护：卡死超时后强制重置
+      let lastQueueBusy = false;      // 最近一次轮询的队列忙碌状态（文档徽章文案用）
+      let docsFetchSeq = 0;           // 文档列表请求序号：丢弃过期响应，防慢请求把最新列表覆盖成旧数据
+
       function setStatus(el, text, ok) {
         const node = $(el);
+        if (!node) return;
         node.textContent = text;
         node.style.color = ok === false ? "var(--danger)" : ok === true ? "var(--ok)" : "var(--muted)";
+      }
+
+      // ---------- 底部 toast 提示 ----------
+      function showToast(text, type) {
+        const container = $("toast-container");
+        if (!container) return;
+        while (container.children.length >= 4) container.firstChild.remove();
+        const el = document.createElement("div");
+        el.className = "toast " + (type || "info");
+        el.textContent = text;
+        container.appendChild(el);
+        const duration = Math.min(7000, 2600 + String(text).length * 30);
+        setTimeout(dismiss, duration);
+        function dismiss() {
+          if (!el.parentNode) return;
+          el.classList.add("hiding");
+          setTimeout(() => el.remove(), 300);
+        }
+      }
+
+      // 操作结果提示：底部 toast + 清空行内状态（ok: true=成功 / false=错误 / 其余=信息）
+      function toastStatus(id, text, ok) {
+        const type = ok === false ? "err" : ok === true ? "ok" : "info";
+        showToast(text, type);
+        setStatus(id, "", undefined);
       }
 
       function esc(s) {
@@ -333,7 +628,6 @@
         btn.addEventListener("click", async () => {
           document.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("active", b === btn));
           document.querySelectorAll(".panel").forEach((p) => p.classList.toggle("active", p.id === "panel-" + btn.dataset.tab));
-          // 每次进入子页刷新对应数据，避免需要手动刷新浏览器
           const tab = btn.dataset.tab;
           if (tab === "kb") {
             refreshKbs();
@@ -350,7 +644,7 @@
 
       // ---------- 知识库列表 ----------
       function renderKbList() {
-        if (!kbs.length) { $("kb-list").textContent = "（暂无知识库，可新建）"; return; }
+        if (!kbs.length) { $("kb-list").innerHTML = '<div class="empty">（暂无知识库，可新建）</div>'; return; }
         $("kb-list").innerHTML = kbs.map((kb) => {
           const cls = kb.status === "READY" ? "ok" : kb.status === "FAILED" ? "err" : "warn";
           const sel = kb.kb_id === selectedKb;
@@ -358,13 +652,20 @@
             <span class="kb-name">${esc(kb.kb_id)}${sel ? ' <span class="badge ok">当前</span>' : ""}</span>
             <span class="badge ${cls}">${esc(kb.status)}</span>
             <span class="kb-stats">v${kb.active_version ?? "-"} · 文档 ${kb.document_count} · 块 ${kb.chunk_count}</span>
-            <button class="primary" data-act="config">配置</button>
-            <button data-act="drop-index">删除索引</button>
-            <button class="danger" data-act="delete">删除</button>
+            <div class="actions">
+              <button class="primary" data-act="config">配置</button>
+              <button data-act="drop-index">删索引</button>
+              <button class="danger" data-act="delete">删除</button>
+            </div>
           </div>`;
         }).join("");
         $("kb-list").querySelectorAll(".kb-item").forEach((item) => {
           const kbId = item.dataset.kb;
+          // 点击行任意位置直接进入配置（行内按钮除外，避免与删/删索引冲突）
+          item.addEventListener("click", (e) => {
+            if (e.target && e.target.closest && e.target.closest("button")) return;
+            openKbModal(kbId);
+          });
           item.querySelector('[data-act="config"]').addEventListener("click", () => openKbModal(kbId));
           item.querySelector('[data-act="drop-index"]').addEventListener("click", () => dropIndex(kbId));
           item.querySelector('[data-act="delete"]').addEventListener("click", () => deleteKb(kbId));
@@ -372,32 +673,39 @@
       }
 
       async function refreshKbs() {
-        $("kb-list").textContent = "加载中…";
+        $("kb-list").innerHTML = '<div class="empty">加载中…</div>';
         try {
           kbs = await bridge.apiGet("list") || [];
           renderKbList();
           renderDefaultChecks();
         } catch (e) {
-          $("kb-list").textContent = "列表加载失败: " + e;
+          $("kb-list").innerHTML = '<div class="empty">列表加载失败: ' + esc(e) + "</div>";
         }
+      }
+
+      // 新建知识库按钮可用状态 = 输入框是否非空。
+      // 注意：程序化清空 value 不会触发 input 事件，必须在清空后显式调用。
+      function updateCreateBtn() {
+        $("btn-kb-create").disabled = !$("new-kb").value.trim();
       }
 
       async function createKb() {
         const kbId = $("new-kb").value.trim();
-        // 输入为空时按钮已禁用，这里仅作兜底；错误提示写入独立状态区，
-        // 绝不侵占知识库列表
-        if (!kbId) { setStatus("kb-op-status", "请输入知识库 ID", false); return; }
+        if (!kbId) { toastStatus("kb-op-status", "请输入知识库 ID", false); return; }
+        const btn = $("btn-kb-create");
+        btn.disabled = true;  // 请求期间防连点
         try {
           await bridge.apiPost("kb/create", { kb_id: kbId });
-          setStatus("kb-op-status", `已创建知识库「${kbId}」`, true);
+          toastStatus("kb-op-status", `已创建知识库「${kbId}」`, true);
           $("new-kb").value = "";
-          // 新建后自动选中该库（上传目标与列表高亮）
+          updateCreateBtn();  // 输入框已清空 → 按钮恢复禁用
           selectedKb = kbId;
           await bridge.apiPost("kb/select", { kb_id: kbId }).catch(() => {});
           refreshKbs();
           loadDefaults();
         } catch (e) {
-          setStatus("kb-op-status", "创建失败: " + e, false);
+          toastStatus("kb-op-status", "创建失败: " + e, false);
+          updateCreateBtn();  // 失败时按当前输入恢复按钮状态
         }
       }
 
@@ -405,7 +713,7 @@
         confirmDialog("删除知识库", `确定删除知识库「${kbId}」？将删除其全部索引与本地文档，且不可恢复。`, async () => {
           try {
             await bridge.apiPost("kb/delete", { kb_id: kbId });
-            setStatus("kb-list", `已删除知识库「${kbId}」`, true);
+            toastStatus("kb-list", `已删除知识库「${kbId}」`, true);
             if (selectedKb === kbId) {
               selectedKb = defaultKb;
               if (selectedKb) bridge.apiPost("kb/select", { kb_id: selectedKb }).catch(() => {});
@@ -413,7 +721,7 @@
             refreshKbs();
             loadDefaults();
           } catch (e) {
-            setStatus("kb-list", "删除失败: " + e, false);
+            toastStatus("kb-list", "删除失败: " + e, false);
           }
         });
       }
@@ -422,11 +730,11 @@
         confirmDialog("删除索引", `确定删除知识库「${kbId}」的索引？知识库和文档列表会保留，下次导入/重建时自动重新构建。`, async () => {
           try {
             await bridge.apiPost("kb/index/delete", { kb_id: kbId });
-            setStatus("kb-list", `已删除「${kbId}」的索引`, true);
+            toastStatus("kb-list", `已删除「${kbId}」的索引`, true);
             refreshKbs();
             if (modalKb === kbId) loadKbModal();
           } catch (e) {
-            setStatus("kb-list", "删除索引失败: " + e, false);
+            toastStatus("kb-list", "删除索引失败: " + e, false);
           }
         });
       }
@@ -434,18 +742,20 @@
       // ---------- 知识库配置悬浮窗 ----------
       function openKbModal(kbId) {
         modalKb = kbId;
-        // 打开配置窗同时选中该库（上传目标 + 列表高亮）；切换库时清空待传列表
         selectedKb = kbId;
         renderKbList();
-        if (pendingFiles.length) {
-          pendingFiles = [];
-          renderPendingList();
-        }
+        // 打开配置窗即选中该库；切换库时重置上传状态与进度
+        pendingFiles = [];
+        localUploads = [];
+        uploadSession = null;
+        awaitingDrain = false;
+        renderPendingList();
+        resetUploadProgress();
+        resetIndexProgress();
         $("kb-modal-title").textContent = "知识库「" + kbId + "」";
-        $("kb-modal-status").textContent = "加载中…";
-        $("documents").textContent = "未加载";
-        $("upload-status").textContent = "";
-        $("modal-progress").style.display = "none";
+        setStatus("kb-modal-status", "加载中…");
+        $("documents").innerHTML = '<div class="empty">未加载</div>';
+        setStatus("upload-status", "");
         $("modal-kb").classList.add("open");
         bridge.apiPost("kb/select", { kb_id: kbId }).catch(() => {});
         loadKbModal();
@@ -473,7 +783,7 @@
           $("kb-modal-status").innerHTML = lines.map((l) => `<div>${l}</div>`).join("");
           loadDocuments();
         } catch (e) {
-          setStatus("kb-modal-status", "状态获取失败: " + e, false);
+          toastStatus("kb-modal-status", "状态获取失败: " + e, false);
         }
       }
       $("kb-modal-rebuild").addEventListener("click", async () => {
@@ -481,19 +791,18 @@
         setStatus("kb-modal-status", "正在触发重建…");
         try {
           const data = await bridge.apiPost("rebuild", { kb_id: modalKb });
-          setStatus("kb-modal-status", "重建完成: " + JSON.stringify(data), true);
+          toastStatus("kb-modal-status", "重建完成: " + JSON.stringify(data), true);
           loadKbModal();
           refreshKbs();
         } catch (e) {
-          setStatus("kb-modal-status", "重建失败: " + e, false);
+          toastStatus("kb-modal-status", "重建失败: " + e, false);
         }
       });
       $("kb-modal-drop-index").addEventListener("click", () => {
         if (modalKb) dropIndex(modalKb);
       });
 
-      let progressPollActive = false;
-      let progressPollDeadline = 0;   // 僵尸保护：卡死超时后强制重置
+      // ---------- 进度轮询 ----------
       async function pollModalProgress() {
         if (!modalKb) return;
         if (progressPollActive) {
@@ -510,10 +819,10 @@
           const p = data && data.progress;
           const q = (data && data.queue) || {};
           // 只把真正进行中的状态视为活跃：READY/FAILED 是终态，若按
-          // status !== "idle" 判定会把轮询循环卡死在活跃分支，导致
-          // awaitingDrain 完成逻辑永远不执行（徽章不翻转/文档不刷新）
+          // status !== "idle" 判定会把轮询循环卡死在活跃分支
           const buildActive = p && ["CREATING", "BUILDING", "SYNCING"].includes(p.status);
           const queueActive = (q.running || 0) > 0 || (q.queued || 0) > 0 || (q.inbox_pending || 0) > 0;
+          lastQueueBusy = queueActive;
           if (buildActive || queueActive || awaitingDrain) {
             const parts = [];
             if (buildActive) {
@@ -531,18 +840,41 @@
               parts.push(
                 `索引队列: 待索引 ${q.inbox_pending || 0}${perKb ? "（" + perKb + "）" : ""} · 运行 ${q.running || 0} · 等待 ${q.queued || 0} · 完成 ${q.completed || 0}（并发上限 ${q.max_concurrent || "-"}）`
               );
-              // 上传完成后等待排空期间：显示文档级进度（已索引 m/n）
-              if (awaitingDrain) {
-                const done = await uploadedIndexedCount();
-                if (done !== null) parts.push(`已索引 ${done}/${uploadedCount()} 文档`);
-              }
             }
-            $("modal-progress").style.display = "block";
-            $("modal-progress").textContent = parts.join("；");
+            const qsEl = $("queue-status");
+            qsEl.textContent = parts.join("；");
+            qsEl.title = qsEl.textContent;  // 悬停查看完整队列状态
+            // 实时刷新文档列表（新上传文件进入列表、逐个翻转为已索引），并驱动索引进度条
+            const wasDraining = awaitingDrain;
+            const docs = await loadDocuments({ silent: true });
+            // 竞态防护：loadDocuments 等待期间排空可能已完成（awaitingDrain 由 true 变 false），
+            // 此时上面拿到的文档列表/计数是旧的，直接用它会把进度条"打回最后一点"。
+            // 检测到该情况就强制满条并重新拉取最新文档列表。
+            const drainedDuringFetch = wasDraining && !awaitingDrain;
+            const done = docs ? sessionIndexedCount(docs) : null;
+            if (drainedDuringFetch && uploadSession && uploadSession.uploaded > 0) {
+              await loadDocuments({ silent: true });
+              updateIndexProgress(uploadSession.uploaded, uploadSession.uploaded);
+            } else if (done !== null && uploadSession) {
+              updateIndexProgress(done, uploadSession.uploaded);
+            } else if (done !== null) {
+              updateIndexProgress(0, 0);  // 无上传会话（如仅重建）
+            }
+            // done === null：过期响应已被丢弃或请求失败 → 保持进度条现状，不更新也不隐藏
+            // 必须先释放并发标志，否则 setTimeout 触发的下一轮会因
+            // progressPollActive 仍为 true 而提前 return，轮询链断裂
+            progressPollActive = false;
             progressPollDeadline = Date.now() + 10000;
             setTimeout(pollModalProgress, 1500);
           } else {
-            $("modal-progress").style.display = "none";
+            // 空闲时保留索引进度条的完成满条状态，不隐藏；仅清空队列详情行
+            $("queue-status").textContent = "";
+            // 兜底：存在已上传会话（索引已完成）时确保进度条满条、列表最新，
+            // 防止任何竞态路径下卡在最后一点
+            if (uploadSession && uploadSession.uploaded > 0) {
+              updateIndexProgress(uploadSession.uploaded, uploadSession.uploaded);
+              loadDocuments({ silent: true });
+            }
             progressPollActive = false;
             // 完成逻辑由 waitForDrain() 负责（awaitingDrain 已被其置 false）
           }
@@ -552,7 +884,7 @@
       }
 
       // 上传完成后的独立排空等待器：不依赖轮询循环（防僵尸循环导致
-      // 完成逻辑永远不执行），队列排空即翻转徽章并刷新文档/统计。
+      // 完成逻辑永远不执行），队列排空即刷新文档/统计。
       async function waitForDrain() {
         while (awaitingDrain) {
           await new Promise((resolve) => setTimeout(resolve, 1500));
@@ -566,9 +898,12 @@
               (q.queued || 0) > 0 ||
               (q.inbox_pending || 0) > 0;
             if (!busy) {
+              updateUploadProgress();  // awaitingDrain 仍为 true → 显示"上传完成：成功 x/y"
               awaitingDrain = false;
-              markUploadedAsIndexed();
-              setStatus("upload-status", "全部文件已上传并完成索引", true);
+              const total = uploadSession ? uploadSession.uploaded : 0;
+              toastStatus("upload-status", `全部 ${total} 个文件已上传并完成索引`, true);
+              // 索引进度条停留在完成满条状态（不再隐藏）
+              if (uploadSession && total > 0) updateIndexProgress(total, total);
               loadKbModal();
               refreshKbs();
               return;
@@ -578,39 +913,6 @@
       }
 
       // ---------- 上传（待传列表 → 快速上传 → 后端动态队列索引） ----------
-      const UPLOAD_BATCH = 3;  // 每批并发上传请求数（上传不等待索引）
-      let pendingFiles = [];   // [{file, status: pending|uploading|uploaded|indexed|error, error}]
-      let uploadBusy = false;
-      let awaitingDrain = false;  // 上传已全部完成，等待索引队列排空
-
-      function uploadedCount() {
-        return pendingFiles.filter((p) => p.status === "uploaded" || p.status === "indexed").length;
-      }
-
-      function markUploadedAsIndexed() {
-        let changed = false;
-        pendingFiles.forEach((p) => {
-          if (p.status === "uploaded") { p.status = "indexed"; changed = true; }
-        });
-        if (changed) renderPendingList();
-      }
-
-      async function uploadedIndexedCount() {
-        // 文档列表中已索引的已上传文件数（驱动"已索引 m/n"进度）
-        try {
-          const data = await bridge.apiGet("kb/documents", { kb_id: modalKb });
-          const docs = data.documents || [];
-          const names = new Set(
-            pendingFiles
-              .filter((p) => p.status === "uploaded" || p.status === "indexed")
-              .map((p) => p.file.name)
-          );
-          return docs.filter((d) => names.has(d.filename) && d.indexed).length;
-        } catch (e) {
-          return null;
-        }
-      }
-
       function addPendingFiles(files) {
         const list = Array.from(files || []);
         for (const file of list) {
@@ -626,27 +928,29 @@
         const btn = $("btn-upload");
         const btnClear = $("btn-upload-clear");
         const pendingCount = pendingFiles.filter((p) => p.status === "pending").length;
+        // 空状态标记：由父容器负责占位文字的水平垂直居中
+        container.classList.toggle("is-empty", !pendingFiles.length);
         if (!pendingFiles.length) {
-          container.style.display = "none";
-          container.innerHTML = "";
+          // 无文件时也显示占位（固定高度，提示可添加上传）；
+          // 注意：不能设内联 display:block，否则会覆盖 CSS 的 display:flex，
+          // 导致 .pending-list.is-empty 的 align-items/justify-content 居中失效。
+          container.innerHTML = '<div class="pending-empty">暂无待上传文件（可拖拽或点击上方上传框添加）</div>';
         } else {
-          container.style.display = "block";
           container.innerHTML = pendingFiles.map((p, i) => {
-            const chip = p.status === "pending" ? "待上传"
-              : p.status === "uploading" ? "上传中…"
-              : p.status === "uploaded" ? "已上传（排队索引）"
-              : p.status === "indexed" ? "已索引"
-              : "失败";
-            const chipCls = p.status === "indexed" ? "badge ok"
-              : p.status === "uploaded" ? "badge warn"
-              : p.status === "error" ? "badge err" : "badge warn";
+            const uploading = p.status === "uploading";
+            const chip = uploading ? "上传中…" : p.status === "error" ? "失败" : "待上传";
+            const chipCls = uploading ? "badge warn pulse" : p.status === "error" ? "badge err" : "badge";
             const removeBtn = (p.status === "pending" || p.status === "error")
-              ? `<button class="danger" data-remove="${i}" title="${esc(p.error || "移除")}">移除</button>` : "";
-            return `<div class="doc-item">
-              <span class="doc-name">${esc(p.file.name)}</span>
-              <span class="doc-size">${fmtSize(p.file.size)}</span>
-              <span class="${chipCls}">${chip}</span>
-              ${removeBtn}
+              ? `<button class="icon-btn" data-remove="${i}" title="${esc(p.error || "移除")}">✕</button>` : "";
+            const bar = uploading ? `<div class="bar"></div>` : "";
+            return `<div class="pending-item">
+              <div class="top">
+                <span class="doc-name" title="${esc(p.file.name)}">${esc(p.file.name)}</span>
+                <span class="doc-size">${fmtSize(p.file.size)}</span>
+                <span class="${chipCls}">${chip}</span>
+                ${removeBtn}
+              </div>
+              ${bar}
             </div>`;
           }).join("");
           container.querySelectorAll("button[data-remove]").forEach((btnEl) => {
@@ -666,9 +970,14 @@
         const queue = pendingFiles.filter((p) => p.status === "pending");
         if (!queue.length) return;
         uploadBusy = true;
+        uploadSession = {
+          files: queue.map((p) => ({ name: p.file.name, size: p.file.size })),
+          uploaded: 0,
+          failed: 0,
+        };
+        const total = queue.length;
         renderPendingList();
-        setStatus("upload-status", `开始上传 ${queue.length} 个文件到「${modalKb}」…`);
-        let ok = 0;
+        setStatus("upload-status", `开始上传 ${total} 个文件到「${modalKb}」…`);
         for (let start = 0; start < queue.length; start += UPLOAD_BATCH) {
           const batch = queue.slice(start, start + UPLOAD_BATCH);
           batch.forEach((item) => { item.status = "uploading"; });
@@ -676,23 +985,36 @@
           await Promise.all(batch.map(async (item) => {
             try {
               await bridge.upload("ingest", item.file);  // 响应即"已上传"，不等索引
-              item.status = "uploaded";
-              ok++;
+              item.status = "done";
+              uploadSession.uploaded++;
+              // 立即在文档列表里"本地占位"，等服务端确认后替换为真实状态
+              localUploads.push({ name: item.file.name, size: item.file.size });
             } catch (e) {
               item.status = "error";
               item.error = String(e);
+              uploadSession.failed++;
             }
           }));
-          renderPendingList();
-          // 每批上传后立即刷新一次队列状态，让索引进度随上传同步显示
+          // 上传成功的文件移出待传列表，进入文档列表
+          const moved = pendingFiles.some((p) => p.status === "done");
+          pendingFiles = pendingFiles.filter((p) => p.status !== "done");
+          if (moved) {
+            renderPendingList();
+            loadDocuments({ silent: true });
+          }
+          updateUploadProgress();
           pollModalProgress();
         }
         uploadBusy = false;
-        awaitingDrain = true;
         renderPendingList();
-        setStatus("upload-status", `上传完成 ${ok}/${queue.length} 个，后端排队索引中（见下方队列状态）…`, true);
-        // 独立排空等待器（不依赖轮询循环），保证完成后徽章翻转与刷新
-        waitForDrain();
+        if (uploadSession.uploaded > 0) {
+          awaitingDrain = true;
+          setStatus("upload-status", `上传完成 ${uploadSession.uploaded}/${total} 个，后端排队索引中（见下方进度）…`, true);
+          updateUploadProgress();
+          waitForDrain();
+        } else {
+          toastStatus("upload-status", "上传失败，请检查后端服务", false);
+        }
         pollModalProgress();
       }
       $("btn-upload").addEventListener("click", startUpload);
@@ -702,6 +1024,52 @@
         renderPendingList();
         setStatus("upload-status", "", true);
       });
+
+      function updateUploadProgress() {
+        const wrap = $("upload-progress-wrap");
+        const fill = $("upload-progress-fill");
+        const label = $("upload-progress-label");
+        if (!uploadSession || !uploadSession.files.length) { wrap.hidden = true; return; }
+        const total = uploadSession.files.length;
+        const done = uploadSession.uploaded + uploadSession.failed;
+        const pct = total ? Math.round((done / total) * 100) : 0;
+        wrap.hidden = false;
+        fill.style.width = pct + "%";
+        label.textContent = awaitingDrain
+          ? `上传完成：成功 ${uploadSession.uploaded}/${total}${uploadSession.failed ? "，失败 " + uploadSession.failed : ""}`
+          : `上传 ${done}/${total}（成功 ${uploadSession.uploaded}${uploadSession.failed ? "，失败 " + uploadSession.failed : ""}）`;
+        label.title = label.textContent;  // 悬停查看完整文本（省略号不丢信息）
+      }
+
+      function resetUploadProgress() {
+        const wrap = $("upload-progress-wrap");
+        if (wrap) wrap.hidden = true;
+        const fill = $("upload-progress-fill");
+        if (fill) fill.style.width = "0%";
+      }
+
+      function updateIndexProgress(done, total) {
+        const wrap = $("index-progress");
+        if (!wrap) return;
+        if (!total) { wrap.hidden = true; return; }
+        wrap.hidden = false;
+        const pct = Math.max(0, Math.min(100, Math.round((done / total) * 100)));
+        $("index-progress-fill").style.width = pct + "%";
+        const labelEl = $("index-progress-label");
+        labelEl.textContent = `索引 ${done}/${total}`;
+        labelEl.title = labelEl.textContent;
+      }
+
+      function resetIndexProgress() {
+        const wrap = $("index-progress");
+        if (wrap) wrap.hidden = true;
+      }
+
+      function sessionIndexedCount(docs) {
+        if (!uploadSession || !uploadSession.files.length) return null;
+        const indexed = new Set((docs || []).filter((d) => d.indexed).map((d) => d.filename));
+        return uploadSession.files.filter((f) => indexed.has(f.name)).length;
+      }
 
       function setupDropzone() {
         const zone = $("dropzone");
@@ -722,38 +1090,69 @@
       }
 
       // ---------- 文档列表 ----------
-      async function loadDocuments() {
-        if (!modalKb) return;
-        $("documents").textContent = "加载中…";
+      async function loadDocuments(options) {
+        const silent = !!(options && options.silent);
+        if (!modalKb) return null;
+        const seq = ++docsFetchSeq;  // 本次请求序号
+        if (!silent) $("documents").innerHTML = '<div class="empty">加载中…</div>';
         try {
           const data = await bridge.apiGet("kb/documents", { kb_id: modalKb });
+          // 丢弃过期响应：期间已有更新的请求发起，旧数据不渲染，避免覆盖成旧状态
+          if (seq !== docsFetchSeq) return null;
           const docs = data.documents || [];
-          if (!docs.length) { $("documents").textContent = "（空）"; return; }
-          $("documents").innerHTML = docs.map((d) => `
-            <div class="doc-item">
-              <span class="doc-name">${esc(d.filename)}</span>
-              <span class="badge ${d.indexed ? "ok" : "warn"}">${d.indexed ? "已索引" : "未索引"}</span>
-              <span class="doc-size">${fmtSize(d.size)} · ${d.chunks || 0} 块</span>
-              <button class="danger" data-doc="${esc(d.filename)}">删除</button>
-            </div>`).join("");
-          $("documents").querySelectorAll("button[data-doc]").forEach((btn) => {
-            btn.addEventListener("click", () => deleteDocument(btn.getAttribute("data-doc")));
-          });
+          renderDocuments(docs);
+          return docs;
         } catch (e) {
-          $("documents").textContent = "文档列表加载失败: " + e;
+          if (seq !== docsFetchSeq) return null;
+          if (!silent) $("documents").innerHTML = '<div class="empty">文档列表加载失败: ' + esc(e) + "</div>";
+          return null;
         }
+      }
+
+      function renderDocuments(docs) {
+        const serverNames = new Set((docs || []).map((d) => d.filename));
+        // 服务端已确认出现的文件：从本地占位中移除
+        localUploads = localUploads.filter((u) => !serverNames.has(u.name));
+        let html = "";
+        for (const d of docs) {
+          const badge = d.indexed
+            ? `<span class="badge ok">已索引</span>`
+            : `<span class="badge ${lastQueueBusy ? "warn pulse" : "warn"}">${lastQueueBusy ? "排队索引中…" : "未索引"}</span>`;
+          html += `<div class="doc-item">
+            <span class="doc-name" title="${esc(d.filename)}">${esc(d.filename)}</span>
+            <span class="doc-size">${fmtSize(d.size)}${d.chunks ? " · " + d.chunks + " 块" : ""}</span>
+            ${badge}
+            <button class="icon-btn" data-doc="${esc(d.filename)}" title="删除">${TRASH_ICON}</button>
+          </div>`;
+        }
+        for (const u of localUploads) {
+          html += `<div class="doc-item pending-local">
+            <span class="doc-name" title="${esc(u.name)}">${esc(u.name)}</span>
+            <span class="doc-size">${fmtSize(u.size)}</span>
+            <span class="badge warn pulse">排队索引中…</span>
+          </div>`;
+        }
+        $("docs-count").textContent = (docs.length + localUploads.length) ? String(docs.length + localUploads.length) : "";
+        if (!html) {
+          $("documents").innerHTML = '<div class="empty">（暂无文档，可拖入或点击上传）</div>';
+          return;
+        }
+        $("documents").innerHTML = html;
+        $("documents").querySelectorAll("button[data-doc]").forEach((btn) => {
+          btn.addEventListener("click", () => deleteDocument(btn.getAttribute("data-doc")));
+        });
       }
 
       function deleteDocument(filename) {
         confirmDialog("删除文档", `确定从知识库「${modalKb}」删除文档「${filename}」？`, async () => {
           try {
             await bridge.apiPost("kb/document/delete", { kb_id: modalKb, filename });
-            setStatus("upload-status", `已删除文档「${filename}」`, true);
+            toastStatus("upload-status", `已删除文档「${filename}」`, true);
             loadDocuments();
             loadKbModal();
             refreshKbs();
           } catch (e) {
-            setStatus("upload-status", "删除失败: " + e, false);
+            toastStatus("upload-status", "删除失败: " + e, false);
           }
         });
       }
@@ -764,7 +1163,6 @@
           const data = await bridge.apiGet("kb/defaults");
           defaultsKbs = new Set(data.kb_ids || []);
           defaultKb = data.default_kb || null;
-          // 默认选中：服务端当前选中库优先，其次默认知识库
           if (selectedKb !== data.selected_kb && data.selected_kb) {
             selectedKb = data.selected_kb;
           } else if (!selectedKb && defaultKb) {
@@ -774,19 +1172,17 @@
           renderDefaultChecks();
           renderKbList();
         } catch (e) {
-          $("defaults-kbs").textContent = "加载失败: " + e;
+          $("defaults-kbs").innerHTML = '<span class="meta">加载失败: ' + esc(e) + "</span>";
         }
       }
 
       function renderDefaultChecks() {
         const container = $("defaults-kbs");
-        if (!kbs.length) { container.textContent = "（暂无知识库）"; return; }
+        if (!kbs.length) { container.innerHTML = '<span class="meta">（暂无知识库）</span>'; return; }
         container.innerHTML = kbs.map((kb) => `
           <label class="${defaultsKbs.has(kb.kb_id) ? "checked" : ""}" data-kb="${esc(kb.kb_id)}">
             <input type="checkbox" ${defaultsKbs.has(kb.kb_id) ? "checked" : ""}> ${esc(kb.kb_id)}
           </label>`).join("");
-        // 用 input 的 change 事件：label 转发合成点击会令 label.click 触发两次
-        // （toggle 净零），change 每物理点击恰好一次，以原生 checked 为准。
         container.querySelectorAll("input[type=checkbox]").forEach((input) => {
           input.addEventListener("change", () => {
             const label = input.closest("label");
@@ -794,34 +1190,40 @@
             if (input.checked) defaultsKbs.add(kbId);
             else defaultsKbs.delete(kbId);
             label.classList.toggle("checked", input.checked);
+            scheduleDefaultsSave();  // 勾选/取消即自动保存
           });
         });
       }
-      $("btn-defaults-save").addEventListener("click", async () => {
+
+      // 默认聚合检索知识库自动保存（勾选/取消触发，防抖合并快速连续操作）
+      let defaultsSaveTimer = null;
+      async function saveDefaults() {
         try {
           const data = await bridge.apiPost("kb/defaults", { kb_ids: Array.from(defaultsKbs) });
           const ids = data.kb_ids || [];
-          setStatus("defaults-status", ids.length ? "已保存默认库: " + ids.join(", ") : "已保存（默认不启用任何知识库）", true);
+          toastStatus("defaults-status", ids.length ? "已保存默认库: " + ids.join(", ") : "已保存（默认不启用任何知识库）", true);
         } catch (e) {
-          setStatus("defaults-status", "保存失败: " + e, false);
+          toastStatus("defaults-status", "保存失败: " + e, false);
         }
-      });
+      }
+      function scheduleDefaultsSave() {
+        clearTimeout(defaultsSaveTimer);
+        defaultsSaveTimer = setTimeout(saveDefaults, 300);
+      }
 
       // ---------- 多知识库检索 ----------
       function applyDefaultsToSearch() {
-        // 每次进入检索页都与聚合集合重新同步；页内勾选仅本次临时生效
         searchKbs = new Set(defaultsKbs);
         renderSearchChecks();
       }
 
       function renderSearchChecks() {
         const container = $("search-kbs");
-        if (!kbs.length) { container.textContent = "（暂无知识库）"; return; }
+        if (!kbs.length) { container.innerHTML = '<span class="meta">（暂无知识库）</span>'; return; }
         container.innerHTML = kbs.map((kb) => `
           <label class="${searchKbs.has(kb.kb_id) ? "checked" : ""}" data-kb="${esc(kb.kb_id)}">
             <input type="checkbox" ${searchKbs.has(kb.kb_id) ? "checked" : ""}> ${esc(kb.kb_id)}
           </label>`).join("");
-        // 与默认聚合库一致：监听 input change，避免 label 合成点击双重触发
         container.querySelectorAll("input[type=checkbox]").forEach((input) => {
           input.addEventListener("change", () => {
             const label = input.closest("label");
@@ -835,7 +1237,7 @@
 
       function renderResults(containerId, results) {
         if (!results || !results.length) {
-          $(containerId).innerHTML = '<div class="meta">（无结果）</div>';
+          $(containerId).innerHTML = '<div class="empty">（无结果）</div>';
           return;
         }
         $(containerId).innerHTML = results.map((r) => {
@@ -872,7 +1274,7 @@
         const box = $("img-preview");
         box.style.display = "block";
         box.innerHTML =
-          `<img src="${imgPreviewUrl}" style="max-width:160px;max-height:120px;border-radius:6px;border:1px solid var(--border);vertical-align:middle">` +
+          `<img src="${imgPreviewUrl}" style="max-width:160px;max-height:120px;border-radius:8px;border:1px solid var(--border);vertical-align:middle">` +
           `<span style="margin-left:10px;color:var(--text)">${esc(file.name)}</span>` +
           `<span class="badge ok" style="margin-left:8px">已就绪，点击图片检索</span>`;
         setStatus("img-query-status", "", true);
@@ -900,12 +1302,12 @@
 
       async function searchImage() {
         const file = droppedImgFile || $("img-query").files[0];
-        if (!file) { setStatus("img-query-status", "请先选择或拖拽一张图片", false); return; }
+        if (!file) { toastStatus("img-query-status", "请先选择或拖拽一张图片", false); return; }
         const kbIds = Array.from(searchKbs);
-        if (!kbIds.length) { setStatus("img-query-status", "请先选择至少一个知识库", false); return; }
+        if (!kbIds.length) { toastStatus("img-query-status", "请先选择至少一个知识库", false); return; }
         const topN = Math.max(1, Math.min(30, Number($("top-n").value) || 6));
         setStatus("img-query-status", `图片检索中（${file.name}）…`);
-        $("search-results").innerHTML = "检索中…";
+        $("search-results").innerHTML = '<div class="empty">检索中…</div>';
         try {
           const imageBase64 = await readFileAsBase64(file);
           const data = await bridge.apiPost("search/image", {
@@ -914,11 +1316,11 @@
             top_n: topN,
           });
           const results = data.results || [];
-          if (!results.length) { setStatus("img-query-status", "未检索到相似图片。", false); renderResults("search-results", []); return; }
-          setStatus("img-query-status", `图片检索到 ${results.length} 条：`, true);
+          if (!results.length) { toastStatus("img-query-status", "未检索到相似图片。", undefined); renderResults("search-results", []); return; }
+          toastStatus("img-query-status", `图片检索到 ${results.length} 条：`, true);
           renderResults("search-results", results);
         } catch (e) {
-          setStatus("img-query-status", "图片检索失败: " + e, false);
+          toastStatus("img-query-status", "图片检索失败: " + e, false);
         }
       }
 
@@ -926,18 +1328,18 @@
         const q = $("query").value.trim();
         if (!q) return;
         const kbIds = Array.from(searchKbs);
-        if (!kbIds.length) { setStatus("search-status", "请先选择至少一个知识库", false); return; }
+        if (!kbIds.length) { toastStatus("search-status", "请先选择至少一个知识库", false); return; }
         const topN = Math.max(1, Math.min(30, Number($("top-n").value) || 6));
         setStatus("search-status", "检索中…");
-        $("search-results").innerHTML = "检索中…";
+        $("search-results").innerHTML = '<div class="empty">检索中…</div>';
         try {
           const data = await bridge.apiGet("search", { kb_ids: kbIds.join(","), q, top_n: topN });
           const results = data.results || [];
-          if (!results.length) { setStatus("search-status", "未检索到相关内容。", false); renderResults("search-results", []); return; }
-          setStatus("search-status", `跨 ${kbIds.length} 个知识库检索到 ${results.length} 条：`, true);
+          if (!results.length) { toastStatus("search-status", "未检索到相关内容。", undefined); renderResults("search-results", []); return; }
+          toastStatus("search-status", `跨 ${kbIds.length} 个知识库检索到 ${results.length} 条：`, true);
           renderResults("search-results", results);
         } catch (e) {
-          setStatus("search-status", "检索失败: " + e, false);
+          toastStatus("search-status", "检索失败: " + e, false);
         }
       }
 
@@ -951,10 +1353,10 @@
           html += `<fieldset><legend>${esc(GROUP_TITLES[group] || group)}</legend>`;
           for (const key of (groupMembers[group] || [])) {
             const meta = schema[key] || {};
-            if (meta.invisible) continue;  // 由知识库管理页维护的隐藏项
+            if (meta.invisible) continue;
             const type = meta.type || "string";
             const value = configValues[key];
-            const desc = meta.description ? `<div class="cfg-desc">${esc(meta.description)}</div>` : "";
+            const desc = meta.hint ? `<div class="cfg-desc">${esc(meta.hint)}</div>` : "";
             if (type === "bool") {
               html += `<div class="cfg-row"><label>${esc(meta.description || key)}</label>` +
                       `<input type="checkbox" id="cfg_${esc(key)}" ${value ? "checked" : ""}></div>${desc}`;
@@ -987,7 +1389,7 @@
           if (cfgTopN > 0) $("top-n").value = cfgTopN;
           setStatus("config-status", "", true);
         } catch (e) {
-          setStatus("config-status", "配置加载失败: " + e, false);
+          toastStatus("config-status", "配置加载失败: " + e, false);
         }
       }
 
@@ -1010,9 +1412,9 @@
           groupMembers = data.group_members || groupMembers;
           configValues = data.config || configValues;
           renderConfigForm();
-          setStatus("config-status", "配置已保存。若 Embedding/分块等索引相关配置有变，重建索引将自动触发。", true);
+          toastStatus("config-status", "配置已保存。若 Embedding/分块等索引相关配置有变，重建索引将自动触发。", true);
         } catch (e) {
-          setStatus("config-status", "保存失败: " + e, false);
+          toastStatus("config-status", "保存失败: " + e, false);
         }
       }
 
@@ -1029,18 +1431,44 @@
         $("query").addEventListener("keydown", (e) => { if (e.key === "Enter") search(); });
         setupDropzone();
         setupImageDropzone();
-        // 新知识库 ID 为空时禁用「新建知识库」按钮
-        const updateCreateBtn = () => {
-          $("btn-kb-create").disabled = !$("new-kb").value.trim();
-        };
         $("new-kb").addEventListener("input", updateCreateBtn);
         updateCreateBtn();
-        await refreshKbs();   // 先加载列表，再应用默认选中（避免渲染竞态）
+        // 按钮涟漪（按下触发、松开释放）：事件委托，覆盖静态与动态渲染的所有按钮
+        document.addEventListener("pointerdown", (e) => {
+          if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+          const target = e.target;
+          const btn = target && target.closest ? target.closest("button") : null;
+          if (!btn) return;
+          const rect = btn.getBoundingClientRect();
+          if (!rect.width && !rect.height) return;
+          // 上一次按下未释放的涟漪先清理（快速连点时只保留最新一个）
+          const prev = btn.querySelector(".ripple");
+          if (prev) prev.remove();
+          const d = Math.hypot(rect.width, rect.height) * 2;
+          const span = document.createElement("span");
+          span.className = "ripple";
+          span.style.width = span.style.height = d + "px";
+          span.style.left = (e.clientX - rect.left - d / 2) + "px";
+          span.style.top = (e.clientY - rect.top - d / 2) + "px";
+          btn.appendChild(span);
+          // 松开（或指针移出/取消）时释放：淡出后移除
+          const release = () => {
+            btn.removeEventListener("pointerup", release);
+            btn.removeEventListener("pointerleave", release);
+            btn.removeEventListener("pointercancel", release);
+            span.classList.add("releasing");
+            setTimeout(() => span.remove(), 260);
+          };
+          btn.addEventListener("pointerup", release);
+          btn.addEventListener("pointerleave", release);
+          btn.addEventListener("pointercancel", release);
+        });
+        await refreshKbs();
         loadDefaults();
         loadConfig();
       }
       init().catch((e) => {
-        setStatus("kb-list", "页面初始化失败: " + e, false);
+        $("kb-list").innerHTML = '<div class="empty">页面初始化失败: ' + esc(e) + "</div>";
       });
     })();
   </script>

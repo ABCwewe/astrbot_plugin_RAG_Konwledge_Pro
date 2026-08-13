@@ -13,7 +13,7 @@ import logging
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
+from typing import Awaitable, Callable
 
 from ..chunking import TextChunker
 from ..imaging import normalize_image_bytes
@@ -82,6 +82,7 @@ class Indexer:
         documents: dict[str, DocumentRecord],
         *,
         progress: ProgressFn | None = None,
+        persist: Callable[[dict[str, DocumentRecord]], Awaitable[None]] | None = None,
     ) -> IndexStats:
         """Add/modify/delete documents to match the current file set.
 
@@ -110,6 +111,10 @@ class Indexer:
                 stats.errors.append(f"{source}: {exc}")
             if progress:
                 progress(i + 1, total, chunks_done)
+            # 每处理完一份文档就把注册表（已变更为最新）交给调用方节流持久化，
+            # 使 WebUI 的文档列表 / 上传条目能实时反映"已索引"，而非等整波完成。
+            if persist:
+                await persist(documents)
 
         # Remove documents whose source file no longer exists.
         for doc_id, record in list(documents.items()):

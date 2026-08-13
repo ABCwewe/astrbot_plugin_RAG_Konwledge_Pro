@@ -32,7 +32,7 @@ def _config(overrides: dict | None = None) -> RAGConfig:
     return RAGConfig.from_dict(data)
 
 
-def _manager(tmp_path, store=None, embedding=None) -> tuple[IndexManager, FakeVectorStore, FakeEmbedding]:
+def _manager(tmp_path, store=None, embedding=None, prefix: str = "") -> tuple[IndexManager, FakeVectorStore, FakeEmbedding]:
     store = store or FakeVectorStore()
     embedding = embedding or FakeEmbedding(dim=8)
     cache = EmbeddingCache(tmp_path / "cache.db")
@@ -42,6 +42,7 @@ def _manager(tmp_path, store=None, embedding=None) -> tuple[IndexManager, FakeVe
         TextChunker(separator="\n\n", chunk_size=100, chunk_overlap=10),
         cache,
         tmp_path / "rag",
+        collection_prefix=prefix,
     )
     return manager, store, embedding
 
@@ -165,3 +166,54 @@ async def test_delete_kb_removes_collections_and_data(tmp_path):
     await manager.delete_kb("kb")
     assert not store.collections
     assert not (tmp_path / "rag" / "kbs" / "kb").exists()
+
+
+# ---------- collection 命名空间隔离（多 client 共享 Qdrant） ----------
+
+
+async def test_custom_prefix_namespaces_collections(tmp_path):
+    manager, store, _ = _manager(tmp_path, prefix="tenantA")
+    _write(tmp_path / "rag" / "kbs" / "kb", "a.md", "内容")
+    # 配置与构造器前缀保持一致（生产里由 adapter 统一解析后注入）
+    await manager.rebuild("kb", _config({"qdrant": {"collection_prefix": "tenantA"}}))
+
+    assert await manager.active_collection("kb") == "tenantA_kb_v1"
+    assert "tenantA_kb_v1" in store.collections
+    assert "astrbot_rag_kb_v1" not in store.collections
+
+
+def test_owns_collection_guard(tmp_path):
+    manager, _, _ = _manager(tmp_path, prefix="tenantA")
+    assert manager._owns_collection("tenantA_kb_v1")           # 本命名空间
+    assert manager._owns_collection("astrbot_rag_kb_v1")       # 遗留前缀兼容
+    assert not manager._owns_collection("other_client_kb_v1")  # 外来集合
+    assert not manager._owns_collection("tenantA")             # 缺 "_" 分隔
+    assert not manager._owns_collection("")
+
+
+async def test_delete_index_skips_foreign_collections(tmp_path):
+    from core.indexing.manifest import STATUS_READY, IndexManifest, ManifestStore
+
+    manager, store, _ = _manager(tmp_path, prefix="tenantA")
+    kb_root = tmp_path / "rag" / "kbs" / "kb"
+    kb_root.mkdir(parents=True, exist_ok=True)
+    mstore = ManifestStore(kb_root)
+
+    foreign = "other_client_kb_v1"
+    own = "tenantA_kb_v1"
+    await store.create_collection(foreign, {"text": 8})
+    await store.create_collection(own, {"text": 8})
+
+    cfg = _config({"qdrant": {"collection_prefix": "tenantA"}})
+    bad = IndexManifest.from_config("kb", 1, cfg, status=STATUS_READY)
+    bad.collection_name = foreign  # 模拟 manifest 错误引用外来集合
+    await mstore.save_manifest(bad)
+    good = IndexManifest.from_config("kb", 2, cfg, status=STATUS_READY)
+    good.collection_name = own
+    await mstore.save_manifest(good)
+
+    await manager.delete_index("kb")
+
+    assert foreign in store.collections                       # 外来集合保留
+    assert own not in store.collections                       # 本命名空间集合被删
+    assert not list(kb_root.glob("manifest_v*.json"))         # manifest 文件仍清理

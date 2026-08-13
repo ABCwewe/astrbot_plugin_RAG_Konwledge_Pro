@@ -58,9 +58,15 @@ def test_config_hash_enables_image_changes():
 
 
 def test_collection_and_document_ids_are_stable():
-    assert collection_name_for("default", 1) == "astrbot_rag_default_v1"
-    assert collection_name_for("default", 3) == "astrbot_rag_default_v3"
-    assert collection_name_for("my kb/1", 2) == "astrbot_rag_my_kb_1_v2"
+    # 空/遗留前缀回退到 astrbot_rag（向后兼容）
+    assert collection_name_for("", "default", 1) == "astrbot_rag_default_v1"
+    assert collection_name_for("astrbot_rag", "default", 3) == "astrbot_rag_default_v3"
+    assert collection_name_for("", "my kb/1", 2) == "astrbot_rag_my_kb_1_v2"
+    # 自定义命名空间隔离（多 client 共享 Qdrant 时每个 client 唯一）
+    assert collection_name_for("tenantA", "default", 1) == "tenantA_default_v1"
+    assert collection_name_for("a b", "default", 1) == "a_b_default_v1"
+    assert collection_name_for("", "default", 1) != collection_name_for("tenantA", "default", 1)
+    # 文档 ID 稳定
     assert document_id_for("default", "a.md") == document_id_for("default", "a.md")
     assert document_id_for("default", "a.md") != document_id_for("other", "a.md")
     assert document_id_for("default", "a.md") != document_id_for("default", "b.md")

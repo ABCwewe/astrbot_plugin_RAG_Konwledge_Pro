@@ -166,6 +166,31 @@ async def test_pdf_pages_carry_page_metadata(tmp_path):
     assert all(p.get("page") in (1, 2) for p in payloads)
 
 
+async def test_persist_hook_reports_partial_registry(tmp_path):
+    """persist 钩子在每份文档处理完后被调用，注册表逐步累积 —— WebUI 依赖
+    它实时显示"已索引"逐文件状态（而非整波完成后一次性出现）。"""
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    a = _write(docs, "a.md", "A 内容")
+    b = _write(docs, "b.md", "B 内容")
+    indexer, store, embedding, cache = _indexer(tmp_path)
+
+    records: dict[str, DocumentRecord] = {}
+    snapshots: list[set[str]] = []
+
+    async def _snapshot(reg):
+        snapshots.append(set(reg.keys()))
+
+    await indexer.sync_documents(
+        "c1", "kb", docs, [a, b], records,
+        persist=_snapshot,
+    )
+
+    assert len(snapshots) == 2  # 每份文档一次
+    assert len(snapshots[0]) == 1  # 第一份处理完即上报（中间态）
+    assert len(snapshots[1]) == 2
+
+
 async def test_image_document_creates_image_chunk(tmp_path):
     docs = tmp_path / "docs"
     docs.mkdir()

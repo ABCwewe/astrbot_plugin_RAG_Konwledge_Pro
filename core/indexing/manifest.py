@@ -33,10 +33,22 @@ STATUS_DELETING = "DELETING"
 _MANIFEST_PREFIX = "manifest_v"
 
 
-def collection_name_for(kb_id: str, version: int) -> str:
-    """Versioned collection name: ``astrbot_rag_<kb_id>_v<version>``."""
+def normalize_namespace(prefix: str) -> str:
+    """Sanitize a collection namespace prefix; empty falls back to the legacy
+    ``astrbot_rag`` so old deployments keep working unchanged."""
+    safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in (prefix or ""))
+    return safe or "astrbot_rag"
+
+
+def collection_name_for(prefix: str, kb_id: str, version: int) -> str:
+    """Versioned collection name: ``<namespace>_<kb_id>_v<version>``.
+
+    ``prefix`` is the per-deployment namespace (see :mod:`core.naming`) that
+    isolates collections when several clients share one Qdrant backend.
+    """
+    ns = normalize_namespace(prefix)
     safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in kb_id)
-    return f"astrbot_rag_{safe}_v{version}"
+    return f"{ns}_{safe}_v{version}"
 
 
 def document_id_for(kb_id: str, source_identity: str) -> str:
@@ -99,7 +111,9 @@ class IndexManifest:
             chunk_separator=config.chunking.separator,
             chunk_size=config.chunking.chunk_size,
             chunk_overlap=config.chunking.chunk_overlap,
-            collection_name=collection_name_for(kb_id, version),
+            collection_name=collection_name_for(
+                config.qdrant.collection_prefix, kb_id, version
+            ),
             config_hash=config.config_hash(),
             created_at=_now(),
             updated_at=_now(),
